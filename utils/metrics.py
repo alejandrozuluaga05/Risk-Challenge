@@ -109,17 +109,49 @@ def summary_metrics(returns: pd.Series, risk_free_annual: float = 0.0,
 
 HORIZONS = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
 
+# Chart/time-range window options, from shortest to "Max" (handled separately
+# since it has no fixed offset). Values are kwargs for pandas.DateOffset.
+CHART_WINDOWS = {
+    "1D": {"days": 1},
+    "1W": {"weeks": 1},
+    "1M": {"months": 1},
+    "1Y": {"years": 1},
+    "3Y": {"years": 3},
+    "5Y": {"years": 5},
+    "10Y": {"years": 10},
+}
+CHART_WINDOW_LABELS = list(CHART_WINDOWS) + ["Max"]
 
-def trailing_slice(returns: pd.Series, years: float):
-    """Trailing N-year slice of a return series ending at its last date.
+
+def _approx_days(offset_kwargs: dict) -> float:
+    return (offset_kwargs.get("years", 0) * 365 + offset_kwargs.get("months", 0) * 30 +
+            offset_kwargs.get("weeks", 0) * 7 + offset_kwargs.get("days", 0))
+
+
+def trailing_slice(returns: pd.Series, **offset_kwargs):
+    """Trailing slice of a return series ending at its last date, e.g.
+    trailing_slice(returns, years=1) or trailing_slice(returns, weeks=1).
     Returns None if the series doesn't have roughly that much history."""
     if returns.empty:
         return None
     end = returns.index.max()
-    start_target = end - pd.DateOffset(years=years)
-    if returns.index.min() > start_target + pd.Timedelta(days=45):
+    start_target = end - pd.DateOffset(**offset_kwargs)
+    tolerance = pd.Timedelta(days=max(1.0, _approx_days(offset_kwargs) * 0.15))
+    if returns.index.min() > start_target + tolerance:
         return None
     return returns[returns.index >= start_target]
+
+
+def resolve_window(returns: pd.Series, label: str):
+    """Slice returns to a CHART_WINDOWS label (or full history for 'Max').
+    Returns (window_returns, was_capped) where was_capped means the
+    requested window wasn't available and full history was used instead."""
+    if label == "Max" or label not in CHART_WINDOWS:
+        return returns, False
+    window = trailing_slice(returns, **CHART_WINDOWS[label])
+    if window is None or len(window) < 2:
+        return returns, True
+    return window, False
 
 
 def multi_horizon_table(returns: pd.Series, risk_free_annual: float = 0.0,
@@ -131,7 +163,7 @@ def multi_horizon_table(returns: pd.Series, risk_free_annual: float = 0.0,
                      f"CVaR {int(confidence*100)}% (1d)"]
     rows = {}
     for label, years in HORIZONS.items():
-        window = trailing_slice(returns, years)
+        window = trailing_slice(returns, years=years)
         if window is None or len(window) < 20:
             rows[label] = {k: np.nan for k in metric_names}
         else:

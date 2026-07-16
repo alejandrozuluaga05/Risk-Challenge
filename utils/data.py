@@ -19,9 +19,30 @@ def fetch_prices(tickers: tuple, period: str = "max") -> pd.DataFrame:
     return close
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_news(ticker: str, limit: int = 6) -> list:
-    """Recent headlines for a ticker. Futures/index symbols often have none."""
+# Futures contracts rarely carry their own Yahoo Finance news feed. Map the
+# two-letter contract root to a widely-covered ETF/index that tracks the same
+# underlying, so headlines are still relevant even if not ticker-exact.
+_PROXY_ROOTS = {
+    "ZN": "^TNX",  # 10Y Treasury Note -> 10Y Treasury Yield Index
+    "ZB": "^TYX",  # 30Y Treasury Bond -> 30Y Treasury Yield Index
+    "ZF": "^FVX",  # 5Y Treasury Note -> 5Y Treasury Yield Index
+    "ZT": "SHY",   # 2Y Treasury Note -> 1-3Y Treasury Bond ETF
+    "HG": "CPER",  # Copper -> Copper ETN
+    "GC": "GLD",   # Gold -> Gold ETF
+    "SI": "SLV",   # Silver -> Silver ETF
+    "CL": "USO",   # Crude Oil -> Oil ETF
+    "NG": "UNG",   # Natural Gas -> Natural Gas ETF
+    "ZC": "CORN",  # Corn -> Corn ETF
+    "ZS": "SOYB",  # Soybeans -> Soybean ETF
+    "ZW": "WEAT",  # Wheat -> Wheat ETF
+}
+
+
+def _proxy_for(ticker: str):
+    return _PROXY_ROOTS.get(ticker.upper()[:2])
+
+
+def _fetch_news_raw(ticker: str, limit: int) -> list:
     try:
         raw = yf.Ticker(ticker).news or []
     except Exception:
@@ -39,6 +60,24 @@ def fetch_news(ticker: str, limit: int = 6) -> list:
             "url": url,
         })
     return items
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_news(ticker: str, limit: int = 6) -> dict:
+    """Recent headlines for a ticker. Falls back to a related, well-covered
+    ETF/index (e.g. copper futures -> CPER, 10Y note futures -> ^TNX) when
+    the ticker itself has no native Yahoo Finance news feed."""
+    items = _fetch_news_raw(ticker, limit)
+    if items:
+        return {"items": items, "proxy": None}
+
+    proxy = _proxy_for(ticker)
+    if proxy:
+        proxy_items = _fetch_news_raw(proxy, limit)
+        if proxy_items:
+            return {"items": proxy_items, "proxy": proxy}
+
+    return {"items": [], "proxy": None}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

@@ -7,10 +7,12 @@ import streamlit as st
 
 from utils.data import fetch_display_name, fetch_news, fetch_prices, fetch_quote
 from utils.metrics import (
-    HORIZONS, drawdown_series, equity_curve, gross_exposure, historical_cvar,
-    historical_var, max_drawdown, multi_horizon_table, net_exposure,
-    portfolio_daily_returns, summary_metrics, trailing_slice,
+    CHART_WINDOW_LABELS, drawdown_series, equity_curve, gross_exposure,
+    historical_cvar, historical_var, max_drawdown, multi_horizon_table,
+    net_exposure, portfolio_daily_returns, resolve_window, summary_metrics,
 )
+
+NAVY, GREEN, RED, AMBER = "#1B2A4A", "#16a34a", "#dc2626", "#b45309"
 
 st.set_page_config(page_title="Portfolio Risk Dashboard", layout="wide",
                     page_icon="📊")
@@ -23,11 +25,21 @@ st.markdown("""
   border:1px solid rgba(22,163,74,0.4); }
 .badge-short { background:rgba(220,38,38,0.15); color:#dc2626;
   border:1px solid rgba(220,38,38,0.4); }
-.news-item { padding:8px 0; border-bottom:1px solid rgba(128,128,128,0.15); }
+.news-item { padding:10px 2px; border-bottom:1px solid rgba(27,42,74,0.08); }
 .news-item:last-child { border-bottom:none; }
-.news-title { font-weight:600; text-decoration:none; }
+.news-title { font-weight:600; text-decoration:none; color:#1B2A4A; transition:color .15s ease; }
+.news-title:hover { color:#3F6C9C; text-decoration:underline; }
 .news-meta { font-size:0.78rem; opacity:0.65; margin-top:2px; }
-h5 { margin-top: 0.75rem; }
+.news-proxy-note { font-size:0.78rem; font-style:italic; color:#5B6B82;
+  margin-bottom:10px; padding-bottom:8px; border-bottom:1px dashed rgba(27,42,74,0.15); }
+.metric-label { font-size:0.82rem; color:#5B6B82; margin-top:2px; }
+.metric-value { font-size:1.9rem; font-weight:700; line-height:1.3; margin-bottom:6px;
+  font-family: Cambria, Georgia, serif; }
+h5 { margin-top: 0.75rem; letter-spacing:.01em; }
+div[data-testid="stVerticalBlockBorderWrapper"] {
+  box-shadow: 0 1px 5px rgba(15,23,42,0.07); border-radius: 10px;
+}
+div[data-baseweb="tab-list"] { gap: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,11 +106,19 @@ def badge(direction: str) -> str:
 
 
 def render_headlines(ticker: str):
-    news = fetch_news(ticker)
-    if not news:
+    result = fetch_news(ticker)
+    items, proxy = result["items"], result["proxy"]
+    if not items:
         st.caption("No recent headlines available for this instrument.")
         return
-    for item in news:
+    if proxy:
+        proxy_name = html.escape(fetch_display_name(proxy))
+        st.markdown(
+            f'<div class="news-proxy-note">{ticker} has no native Yahoo Finance news feed — '
+            f'showing related market news via {proxy_name} ({proxy}) instead.</div>',
+            unsafe_allow_html=True,
+        )
+    for item in items:
         try:
             pub_fmt = pd.to_datetime(item["published"]).strftime("%b %d, %Y %H:%M UTC")
         except Exception:
@@ -130,32 +150,38 @@ def format_horizon_table(table: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def render_horizon_charts(returns: pd.Series, key_prefix: str):
-    horizon = st.radio("Chart window", ["1Y", "3Y", "5Y", "10Y", "Max"], index=4,
-                        horizontal=True, key=f"{key_prefix}_horizon")
-    if horizon == "Max":
-        window = returns
-    else:
-        window = trailing_slice(returns, HORIZONS[horizon])
-        if window is None:
-            st.info(f"Not enough history for a {horizon} window; showing full history instead.")
-            window = returns
+def render_range_selector(key_prefix: str) -> str:
+    return st.radio("Time range", CHART_WINDOW_LABELS, index=len(CHART_WINDOW_LABELS) - 1,
+                     horizontal=True, key=f"{key_prefix}_range")
 
-    curve = equity_curve(window)
-    dd = drawdown_series(window)
+
+def render_charts(window_returns: pd.Series, label: str, key_prefix: str):
+    curve = equity_curve(window_returns)
+    dd = drawdown_series(window_returns)
     c1, c2 = st.columns(2)
     with c1:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=curve.index, y=curve, line=dict(color="#2563eb", width=2)))
-        fig.update_layout(title=f"Equity Curve ({horizon}, base = 100)", height=340,
+        fig.add_trace(go.Scatter(x=curve.index, y=curve, line=dict(color="#2563eb", width=2),
+                                  fill="tozeroy", fillcolor="rgba(37,99,235,0.06)"))
+        fig.update_layout(title=f"Equity Curve ({label}, base = 100)", height=340,
                            margin=dict(t=40, b=20), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_eq")
     with c2:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=dd.index, y=dd, fill="tozeroy", line=dict(color="#dc2626", width=1)))
-        fig.update_layout(title=f"Drawdown ({horizon})", height=340, yaxis_tickformat=".0%",
+        fig.update_layout(title=f"Drawdown ({label})", height=340, yaxis_tickformat=".0%",
                            margin=dict(t=40, b=20), hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_dd")
+
+
+def render_self_contained_charts(returns: pd.Series, key_prefix: str):
+    """Range selector + charts, both driven by the same widget (used where
+    nothing else on the page needs to react to the selected range)."""
+    label = render_range_selector(key_prefix)
+    window_returns, capped = resolve_window(returns, label)
+    if capped:
+        st.info(f"Not enough history for a {label} window; showing full history instead.")
+    render_charts(window_returns, label, key_prefix)
 
 
 def render_ticker_tab(ticker: str):
@@ -187,20 +213,36 @@ def render_ticker_tab(ticker: str):
 
     st.markdown("##### Charts")
     with st.container(border=True):
-        render_horizon_charts(returns, key_prefix=f"tk_{ticker}")
+        render_self_contained_charts(returns, key_prefix=f"tk_{ticker}")
+
+
+def _metric_cell(col, label: str, value, fmt: str, color: str):
+    text = "N/A" if pd.isna(value) else format(value, fmt)
+    col.markdown(
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value" style="color:{color if not pd.isna(value) else NAVY}">{text}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def render_metric_cards(m: dict):
-    cols = st.columns(4)
-    cols[0].metric("Total Return", f"{m['Total Return']:.1%}")
-    cols[1].metric("YTD Return", f"{m['YTD Return']:.1%}")
-    cols[2].metric("CAGR", f"{m['CAGR']:.1%}")
-    cols[3].metric("Sharpe Ratio", f"{m['Sharpe Ratio']:.2f}")
-    cols2 = st.columns(4)
-    cols2[0].metric("Ann. Volatility", f"{m['Ann. Volatility']:.1%}")
-    cols2[1].metric("Max Drawdown", f"{m['Max Drawdown']:.1%}")
-    cols2[2].metric(f"VaR {int(confidence*100)}% (1d)", f"{m[f'VaR {int(confidence*100)}% (1d)']:.2%}")
-    cols2[3].metric(f"CVaR {int(confidence*100)}% (1d)", f"{m[f'CVaR {int(confidence*100)}% (1d)']:.2%}")
+    var_key = f"VaR {int(confidence*100)}% (1d)"
+    cvar_key = f"CVaR {int(confidence*100)}% (1d)"
+
+    row1 = st.columns(4)
+    _metric_cell(row1[0], "Total Return", m["Total Return"], ".1%",
+                 GREEN if m["Total Return"] >= 0 else RED)
+    _metric_cell(row1[1], "YTD Return", m["YTD Return"], ".1%",
+                 GREEN if m["YTD Return"] >= 0 else RED)
+    _metric_cell(row1[2], "CAGR", m["CAGR"], ".1%", GREEN if m["CAGR"] >= 0 else RED)
+    _metric_cell(row1[3], "Sharpe Ratio", m["Sharpe Ratio"], ".2f",
+                 GREEN if m["Sharpe Ratio"] >= 0 else RED)
+
+    row2 = st.columns(4)
+    _metric_cell(row2[0], "Ann. Volatility", m["Ann. Volatility"], ".1%", NAVY)
+    _metric_cell(row2[1], "Max Drawdown", m["Max Drawdown"], ".1%", RED)
+    _metric_cell(row2[2], var_key, m[var_key], ".2%", AMBER)
+    _metric_cell(row2[3], cvar_key, m[cvar_key], ".2%", AMBER)
 
 
 def render_portfolio_tab():
@@ -234,13 +276,19 @@ def render_portfolio_tab():
         st.dataframe(format_horizon_table(multi_horizon_table(base_returns, risk_free, confidence)),
                      use_container_width=True)
 
-    st.markdown("##### Key Metrics")
+    st.markdown("##### Time Range")
+    range_label = render_range_selector("portfolio")
+    window_returns, capped = resolve_window(base_returns, range_label)
+    if capped:
+        st.info(f"Not enough history for a {range_label} window; showing full history instead.")
+
+    st.markdown(f"##### Key Metrics ({range_label})")
     with st.container(border=True):
-        render_metric_cards(summary_metrics(base_returns, risk_free, confidence))
+        render_metric_cards(summary_metrics(window_returns, risk_free, confidence))
 
     st.markdown("##### Charts")
     with st.container(border=True):
-        render_horizon_charts(base_returns, key_prefix="portfolio")
+        render_charts(window_returns, range_label, key_prefix="portfolio")
 
     if not hedge_weights_input:
         st.info("Add a hedge instrument in the Controls tab to compare pre- and "
