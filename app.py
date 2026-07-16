@@ -348,15 +348,27 @@ def render_portfolio_tab():
                        "reduced tail risk.")
 
 
+def _sync_weight(item: dict, source: str):
+    w_key, n_key = f"w_{item['id']}", f"wn_{item['id']}"
+    if source == "slider":
+        st.session_state[n_key] = st.session_state[w_key]
+    else:
+        st.session_state[w_key] = st.session_state[n_key]
+
+
 def render_position_row(item: dict, group_key: str):
     with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([1.6, 3, 1.6, 0.6])
+        c1, c2, c3, c4, c5 = st.columns([1.3, 2.0, 1.0, 2.0, 0.5])
         c1.markdown(f"**{item['ticker']}**")
         c2.slider("Weight %", 0.0, 100.0, value=item["default_weight"], step=0.5,
-                  key=f"w_{item['id']}", label_visibility="collapsed")
-        c3.segmented_control("Direction", ["Long", "Short"], default=item["default_dir"],
+                  key=f"w_{item['id']}", label_visibility="collapsed",
+                  on_change=_sync_weight, args=(item, "slider"))
+        c3.number_input("Weight % (exact)", 0.0, 100.0, value=item["default_weight"],
+                         step=0.5, key=f"wn_{item['id']}", label_visibility="collapsed",
+                         on_change=_sync_weight, args=(item, "number"))
+        c4.segmented_control("Direction", ["Long", "Short"], default=item["default_dir"],
                               key=f"d_{item['id']}", required=True, label_visibility="collapsed")
-        remove = c4.button("✕", key=f"rm_{item['id']}", help="Remove")
+        remove = c5.button("✕", key=f"rm_{item['id']}", help="Remove")
     return remove
 
 
