@@ -1,5 +1,6 @@
 """Portfolio risk & performance dashboard, powered by Yahoo Finance (yfinance)."""
 import html
+import json
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,10 @@ from utils.metrics import (
     CHART_WINDOW_LABELS, drawdown_series, equity_curve, gross_exposure,
     historical_cvar, historical_var, max_drawdown, multi_horizon_table,
     net_exposure, portfolio_daily_returns, resolve_window, summary_metrics,
+)
+from utils.scenarios import (
+    asset_betas, benchmark_stats, hedged_variance, market_model,
+    optimal_hedge_ratio, stressed_var_cvar, variance_curve,
 )
 
 NAVY, GREEN, RED, AMBER = "#1B2A4A", "#16a34a", "#dc2626", "#b45309"
@@ -653,6 +658,291 @@ def render_correlation_tab():
                        "assets that merge only at the top are close to independent.")
 
 
+# --------------------------------------------------------- risk scenarios --
+SCENARIO_DEFS = [("Down 10%", -0.10), ("Down 5%", -0.05), ("Down 1%", -0.01),
+                  ("Up 1%", 0.01), ("Up 5%", 0.05), ("Up 10%", 0.10)]
+
+
+def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_ret: pd.Series,
+                             full_port_ret: pd.Series, has_hedge: bool, ind_betas: dict):
+    st.markdown(f"##### Scenario: Economy (SPY) moves {pct:+.0%}")
+
+    rows = []
+    for name, mm, ret in [("Before Hedge", mm_base, base_port_ret)] + (
+            [("After Hedge", mm_full, full_port_ret)] if has_hedge else []):
+        svar, scvar, mu = stressed_var_cvar(mm["beta"], pct, mm["residual_std"], confidence)
+        rows.append({
+            "Portfolio": name, "Beta to SPY": mm["beta"], "Shock P&L": mu,
+            "Baseline VaR": historical_var(ret, confidence),
+            "Stressed VaR": svar,
+            "Baseline CVaR": historical_cvar(ret, confidence),
+            "Stressed CVaR": scvar,
+        })
+    df = pd.DataFrame(rows).set_index("Portfolio")
+
+    with st.container(border=True):
+        cols = st.columns(len(rows))
+        for col, (name, r) in zip(cols, zip(df.index, rows)):
+            _metric_cell(col, f"{name}: Scenario Shock P&L", r["Shock P&L"], "+.2%",
+                         GREEN if r["Shock P&L"] >= 0 else RED)
+
+        cl = f"{int(confidence*100)}%"
+        disp = pd.DataFrame({
+            "Beta to SPY": df["Beta to SPY"].map(lambda v: f"{v:.3f}"),
+            "Shock P&L": df["Shock P&L"].map(lambda v: f"{v:+.2%}"),
+            f"Baseline VaR {cl}": df["Baseline VaR"].map(lambda v: f"{v:.2%}"),
+            f"Stressed VaR {cl}": df["Stressed VaR"].map(
+                lambda v: f"{v:.2%}" if v >= 0 else f"({-v:.2%} gain)"),
+            f"Baseline CVaR {cl}": df["Baseline CVaR"].map(lambda v: f"{v:.2%}"),
+            f"Stressed CVaR {cl}": df["Stressed CVaR"].map(
+                lambda v: f"{v:.2%}" if v >= 0 else f"({-v:.2%} gain)"),
+        }, index=df.index)
+        st.dataframe(disp, use_container_width=True)
+        st.caption(
+            "Shock P&L = βₚ × scenario move, from a single-factor OLS regression of portfolio "
+            "returns on SPY. Stressed VaR/CVaR re-center the portfolio's residual (idiosyncratic, "
+            "market-orthogonal) volatility around that shock: SVaR = -(μ+z·σ), "
+            "SCVaR = -(μ-σ·φ(z)/(1-c)), where μ = shock P&L, σ = daily residual std, "
+            "z = Φ⁻¹(1-c). Both formulas verified against 2M-draw Monte Carlo simulation. A "
+            "negative value means even the worst-case tail under this scenario is still a gain."
+        )
+
+    st.markdown("###### Per-Instrument Shock Contribution (Full Portfolio, incl. hedge)")
+    with st.container(border=True):
+        rows2 = []
+        for t, w in full_weights.items():
+            b = ind_betas.get(t, np.nan)
+            rows2.append({"Ticker": t, "Weight": w, "Beta to SPY": b, "Contribution": w * b * pct})
+        df2 = pd.DataFrame(rows2).set_index("Ticker")
+        colors = ["#dc2626" if v < 0 else "#3F6C9C" for v in df2["Contribution"]]
+        fig = go.Figure(go.Bar(x=list(df2.index), y=df2["Contribution"] * 100, marker_color=colors,
+                                text=[f"{v:+.2%}" for v in df2["Contribution"]], textposition="outside"))
+        fig.add_hline(y=0, line_color="#94a3b8")
+        fig.update_layout(height=320, margin=dict(t=20, b=20), yaxis_title="Contribution to Shock P&L (%)")
+        st.plotly_chart(fig, use_container_width=True, key=f"shock_contrib_{pct}")
+        disp2 = pd.DataFrame({
+            "Weight": df2["Weight"].map(lambda v: f"{v:+.1%}"),
+            "Beta to SPY": df2["Beta to SPY"].map(lambda v: f"{v:.3f}"),
+            "Contribution to Shock P&L": df2["Contribution"].map(lambda v: f"{v:+.3%}"),
+        }, index=df2.index)
+        st.dataframe(disp2, use_container_width=True)
+        st.caption(f"Contributions sum to {df2['Contribution'].sum():+.3%}, matching the full "
+                   f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
+
+
+def render_optimal_hedge_content(base_port_ret: pd.Series, merged_rets: pd.DataFrame,
+                                  candidate_tickers: list):
+    st.markdown("##### Optimal (Minimum-Variance) Hedge Ratio")
+    default_candidate = next(iter(hedge_weights_input), candidate_tickers[0])
+    default_idx = candidate_tickers.index(default_candidate) if default_candidate in candidate_tickers else 0
+    candidate = st.selectbox("Hedge candidate instrument", candidate_tickers, index=default_idx,
+                              key="opt_hedge_candidate")
+    hedge_ret = merged_rets[candidate]
+    result = optimal_hedge_ratio(base_port_ret, hedge_ret)
+    current_h = hedge_weights_input.get(candidate, 0.0)
+    current_var = hedged_variance(base_port_ret, hedge_ret, current_h)
+    current_vol = float(np.sqrt(current_var * 252))
+    reduction_current = 1 - current_var / result["var_unhedged"] if result["var_unhedged"] else np.nan
+    reduction_optimal = result["hedge_effectiveness"]
+
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        _metric_cell(c1, "Optimal Hedge Weight (h*)", result["h_star"], "+.1%", NAVY)
+        _metric_cell(c2, "Current Configured Weight", current_h, "+.1%", NAVY)
+        _metric_cell(c3, "Correlation (ρ)", result["rho"], "+.3f", NAVY)
+        _metric_cell(c4, "Max Hedge Effectiveness (ρ²)", result["hedge_effectiveness"], ".1%", NAVY)
+        st.caption("h* = -Cov(portfolio, hedge) / Var(hedge) (Ederington 1979) — the weight that "
+                   "minimizes portfolio variance. Verified against brute-force grid search over "
+                   "20,000 candidate weights. Hedge Effectiveness = ρ² = the maximum fraction of "
+                   "portfolio variance this single instrument can remove.")
+
+    with st.container(border=True):
+        hs, variances = variance_curve(base_port_ret, hedge_ret)
+        vols = np.sqrt(variances * 252) * 100
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hs * 100, y=vols, mode="lines",
+                                  line=dict(color="#3F6C9C", width=2.5), name="Portfolio Vol"))
+        fig.add_vline(x=result["h_star"] * 100, line_dash="dash", line_color="#16a34a",
+                      annotation_text=f"Optimal h* = {result['h_star']:+.1%}",
+                      annotation_position="top")
+        fig.add_vline(x=current_h * 100, line_dash="dot", line_color="#b45309",
+                      annotation_text=f"Current h = {current_h:+.1%}",
+                      annotation_position="bottom")
+        fig.update_layout(title=f"Portfolio Volatility vs. {candidate} Hedge Weight",
+                           xaxis_title="Hedge Weight (%)", yaxis_title="Annualized Portfolio Vol (%)",
+                           height=420, margin=dict(t=40, b=20))
+        st.plotly_chart(fig, use_container_width=True, key="hedge_variance_curve")
+
+    with st.container(border=True):
+        summary = pd.DataFrame({
+            "Ann. Volatility": [f"{result['vol_unhedged']:.2%}", f"{current_vol:.2%}",
+                                 f"{result['vol_at_optimal']:.2%}"],
+        }, index=["Unhedged", f"Current ({current_h:+.1%})", f"Optimal ({result['h_star']:+.1%})"])
+        st.dataframe(summary, use_container_width=True)
+        pct_of_max = reduction_current / reduction_optimal if reduction_optimal else np.nan
+        st.caption(f"The current hedge weight captures {pct_of_max:.0%} of the maximum achievable "
+                   f"variance reduction from {candidate} ({reduction_current:.1%} realized vs. a "
+                   f"maximum possible {reduction_optimal:.1%} at the optimal weight).")
+
+
+def render_benchmark_content(base_port_ret: pd.Series, full_port_ret: pd.Series,
+                              spy_ret: pd.Series, ief_ret: pd.Series, has_hedge: bool):
+    st.markdown("##### Benchmark Comparison")
+    c1, c2 = st.columns(2)
+    bench_choice = c1.radio("Benchmark", ["SPY (S&P 500)", "60/40 SPY/IEF Blend"],
+                             horizontal=True, key="bench_choice")
+    port_choice = c2.radio("Portfolio", ["After Hedge", "Before Hedge"] if has_hedge else ["Portfolio"],
+                            horizontal=True, key="bench_port_choice")
+    bench_ret = (0.6 * spy_ret + 0.4 * ief_ret) if bench_choice.startswith("60/40") else spy_ret
+    bench_label = "60/40 SPY/IEF" if bench_choice.startswith("60/40") else "SPY"
+    port_ret = base_port_ret if port_choice == "Before Hedge" else full_port_ret
+
+    stats = benchmark_stats(port_ret, bench_ret)
+    with st.container(border=True):
+        cols = st.columns(4)
+        _metric_cell(cols[0], "Beta", stats["beta"], ".3f", NAVY)
+        _metric_cell(cols[1], "Annualized Alpha", stats["alpha_annual"], "+.2%",
+                      GREEN if stats["alpha_annual"] >= 0 else RED)
+        _metric_cell(cols[2], "R²", stats["r_squared"], ".1%", NAVY)
+        _metric_cell(cols[3], "Tracking Error", stats["tracking_error"], ".2%", AMBER)
+        cols2 = st.columns(4)
+        _metric_cell(cols2[0], "Information Ratio", stats["information_ratio"], "+.2f",
+                      GREEN if stats["information_ratio"] >= 0 else RED)
+        _metric_cell(cols2[1], "Up-Market Capture", stats["up_capture"], ".1%", NAVY)
+        _metric_cell(cols2[2], "Down-Market Capture", stats["down_capture"], ".1%", NAVY)
+        _metric_cell(cols2[3], "N (days)", stats["n"], ".0f", NAVY)
+        st.caption(f"{port_choice} vs. {bench_label}. Alpha is annualized CAPM alpha (arithmetic "
+                   "scaling of the daily OLS intercept). Up/Down capture = average portfolio return "
+                   "on days the benchmark rose/fell, divided by the benchmark's average return on "
+                   "those same days.")
+
+    with st.container(border=True):
+        aligned = pd.concat([port_ret.rename("p"), bench_ret.rename("b")], axis=1).dropna()
+        port_curve = (1 + aligned["p"]).cumprod() * 100
+        bench_curve = (1 + aligned["b"]).cumprod() * 100
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=port_curve.index, y=port_curve, name=port_choice,
+                                  line=dict(color="#3F6C9C", width=2.5)))
+        fig.add_trace(go.Scatter(x=bench_curve.index, y=bench_curve, name=bench_label,
+                                  line=dict(color="#b45309", width=2)))
+        fig.update_layout(title=f"{port_choice} vs. {bench_label} (base = 100)", height=400,
+                           margin=dict(t=40, b=20), hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True, key="benchmark_curve")
+
+
+def _apply_config(loaded: dict):
+    next_id = st.session_state.next_id
+    new_holdings = []
+    for i, h in enumerate(loaded.get("holdings", [])):
+        next_id += 1
+        new_holdings.append({"id": f"h{next_id}", "ticker": str(h["ticker"]).strip().upper(),
+                              "default_weight": float(h["weight"]), "default_dir": h["direction"]})
+    new_hedges = []
+    for i, g in enumerate(loaded.get("hedges", [])):
+        next_id += 1
+        new_hedges.append({"id": f"g{next_id}", "ticker": str(g["ticker"]).strip().upper(),
+                            "default_weight": float(g["weight"]), "default_dir": g["direction"]})
+
+    for key in list(st.session_state.keys()):
+        if key.startswith(("w_", "wn_", "d_", "rm_")):
+            del st.session_state[key]
+
+    st.session_state.holdings_meta = new_holdings
+    st.session_state.hedges_meta = new_hedges
+    st.session_state.next_id = next_id
+    st.session_state["risk_free"] = float(loaded.get("risk_free_pct", 4.0))
+    st.session_state["confidence_pct"] = int(loaded.get("confidence_pct", 95))
+    st.session_state["_config_loaded"] = True
+
+
+def render_save_export_content():
+    st.markdown("##### Save Configuration")
+    with st.container(border=True):
+        config = {
+            "holdings": [{"ticker": h["ticker"],
+                          "weight": st.session_state.get(f"w_{h['id']}", h["default_weight"]),
+                          "direction": st.session_state.get(f"d_{h['id']}", h["default_dir"])}
+                         for h in st.session_state.holdings_meta],
+            "hedges": [{"ticker": g["ticker"],
+                        "weight": st.session_state.get(f"w_{g['id']}", g["default_weight"]),
+                        "direction": st.session_state.get(f"d_{g['id']}", g["default_dir"])}
+                       for g in st.session_state.hedges_meta],
+            "risk_free_pct": st.session_state.get("risk_free", 4.0),
+            "confidence_pct": st.session_state.get("confidence_pct", 95),
+        }
+        json_str = json.dumps(config, indent=2)
+        st.download_button("Download configuration (JSON)", data=json_str,
+                            file_name="portfolio_config.json", mime="application/json",
+                            key="download_config_btn")
+        st.code(json_str, language="json")
+
+    st.markdown("##### Load Configuration")
+    with st.container(border=True):
+        if st.session_state.pop("_config_loaded", False):
+            st.success("Configuration loaded — check the Controls tab to review, or any other tab "
+                       "to see it reflected live.")
+        uploaded = st.file_uploader("Upload a portfolio_config.json file", type=["json"],
+                                     key="config_upload")
+        if uploaded is not None:
+            try:
+                loaded = json.load(uploaded)
+                st.button("Apply this configuration", key="apply_config_btn",
+                          on_click=_apply_config, args=(loaded,))
+            except Exception as e:
+                st.error(f"Could not parse file: {e}")
+
+
+def render_risk_scenarios_tab():
+    valid_tickers = [t for t in all_tickers if t not in missing]
+    if not base_weights or len(valid_tickers) < 1:
+        st.warning("Add at least one valid holding in the Controls tab to run risk scenarios.")
+        return
+
+    with st.spinner("Pulling benchmark data (SPY, IEF) from Yahoo Finance..."):
+        try:
+            bench_prices = fetch_prices(("SPY", "IEF"), period="max")
+        except Exception as e:
+            st.error(f"Failed to fetch benchmark data: {e}")
+            return
+
+    needed = sorted(set(base_weights) | set(full_weights))
+    merged_prices = prices[needed].join(bench_prices, how="inner")
+    merged_rets = merged_prices.pct_change().dropna(how="any")
+
+    base_port_ret = (merged_rets[list(base_weights)] * pd.Series(base_weights)).sum(axis=1)
+    full_port_ret = (merged_rets[list(full_weights)] * pd.Series(full_weights)).sum(axis=1)
+    spy_ret, ief_ret = merged_rets["SPY"], merged_rets["IEF"]
+    has_hedge = bool(hedge_weights_input)
+
+    mm_base = market_model(base_port_ret, spy_ret)
+    mm_full = market_model(full_port_ret, spy_ret) if has_hedge else mm_base
+    ind_betas = asset_betas(merged_rets, spy_ret, list(full_weights))
+
+    st.title("Risk Scenarios: VaR & Stressed VaR")
+    st.caption(
+        f"Single-factor market model vs. SPY · {mm_full['n']} overlapping trading days · "
+        f"Full portfolio β = {mm_full['beta']:.3f} (R² = {mm_full['r_squared']:.1%}) · "
+        f"Confidence level {int(confidence*100)}% (set in Controls → Risk Settings)."
+    )
+
+    sub_labels = [s[0] for s in SCENARIO_DEFS] + ["Optimal Hedge", "Benchmark Comparison", "Save / Export"]
+    sub = st.tabs(sub_labels)
+
+    for (_, pct), tab in zip(SCENARIO_DEFS, sub[:6]):
+        with tab:
+            render_scenario_content(pct, mm_base, mm_full, base_port_ret, full_port_ret,
+                                     has_hedge, ind_betas)
+
+    with sub[6]:
+        render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
+
+    with sub[7]:
+        render_benchmark_content(base_port_ret, full_port_ret, spy_ret, ief_ret, has_hedge)
+
+    with sub[8]:
+        render_save_export_content()
+
+
 def _sync_weight(item: dict, source: str):
     w_key, n_key = f"w_{item['id']}", f"wn_{item['id']}"
     if source == "slider":
@@ -662,17 +952,23 @@ def _sync_weight(item: dict, source: str):
 
 
 def render_position_row(item: dict, group_key: str):
+    w_key, n_key, d_key = f"w_{item['id']}", f"wn_{item['id']}", f"d_{item['id']}"
+    # Seed defaults once, then never pass value=/default= alongside a key that
+    # a callback (sync or config-load) might also write to — Streamlit warns
+    # (and can misbehave) if both happen in the same run.
+    st.session_state.setdefault(w_key, item["default_weight"])
+    st.session_state.setdefault(n_key, item["default_weight"])
+    st.session_state.setdefault(d_key, item["default_dir"])
+
     with st.container(border=True):
         c1, c2, c3, c4, c5 = st.columns([1.3, 2.0, 1.0, 2.0, 0.5])
         c1.markdown(f"**{item['ticker']}**")
-        c2.slider("Weight %", 0.0, 100.0, value=item["default_weight"], step=0.5,
-                  key=f"w_{item['id']}", label_visibility="collapsed",
+        c2.slider("Weight %", 0.0, 100.0, step=0.5, key=w_key, label_visibility="collapsed",
                   on_change=_sync_weight, args=(item, "slider"))
-        c3.number_input("Weight % (exact)", 0.0, 100.0, value=item["default_weight"],
-                         step=0.5, key=f"wn_{item['id']}", label_visibility="collapsed",
-                         on_change=_sync_weight, args=(item, "number"))
-        c4.segmented_control("Direction", ["Long", "Short"], default=item["default_dir"],
-                              key=f"d_{item['id']}", required=True, label_visibility="collapsed")
+        c3.number_input("Weight % (exact)", 0.0, 100.0, step=0.5, key=n_key,
+                         label_visibility="collapsed", on_change=_sync_weight, args=(item, "number"))
+        c4.segmented_control("Direction", ["Long", "Short"], key=d_key, required=True,
+                              label_visibility="collapsed")
         remove = c5.button("✕", key=f"rm_{item['id']}", help="Remove")
     return remove
 
@@ -730,11 +1026,11 @@ def render_controls_tab():
     st.divider()
     st.markdown("#### Risk Settings")
     with st.container(border=True):
+        st.session_state.setdefault("risk_free", 4.0)
+        st.session_state.setdefault("confidence_pct", 95)
         c1, c2 = st.columns(2)
-        c1.slider("Risk-free rate (annual %)", 0.0, 10.0, value=4.0,
-                   step=0.25, key="risk_free")
-        c2.slider("VaR / CVaR confidence (%)", 90, 99, value=95,
-                   step=1, key="confidence_pct")
+        c1.slider("Risk-free rate (annual %)", 0.0, 10.0, step=0.25, key="risk_free")
+        c2.slider("VaR / CVaR confidence (%)", 90, 99, step=1, key="confidence_pct")
 
     st.divider()
     st.markdown("#### Live Exposure Summary")
@@ -750,7 +1046,7 @@ def render_controls_tab():
 tab_tickers = list(dict.fromkeys(
     [h["ticker"] for h in holdings] + [g["ticker"] for g in hedges]
 ))
-tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Controls"]
+tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Risk Scenarios", "Controls"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -760,8 +1056,11 @@ for ticker, tab in zip(tab_tickers, tabs[1:len(tab_tickers) + 1]):
     with tab:
         render_ticker_tab(ticker)
 
-with tabs[-2]:
+with tabs[-3]:
     render_correlation_tab()
+
+with tabs[-2]:
+    render_risk_scenarios_tab()
 
 with tabs[-1]:
     render_controls_tab()
