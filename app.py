@@ -31,6 +31,9 @@ st.markdown("""
   border:1px solid rgba(22,163,74,0.4); }
 .badge-short { background:rgba(220,38,38,0.15); color:#dc2626;
   border:1px solid rgba(220,38,38,0.4); }
+.hedge-tag { font-size:0.65rem; font-weight:700; color:#5B6B82; text-transform:uppercase;
+  letter-spacing:.04em; }
+.badge-sep { color:#C9D2DC; font-weight:400; }
 .news-item { padding:10px 2px; border-bottom:1px solid rgba(27,42,74,0.08); }
 .news-item:last-child { border-bottom:none; }
 .news-title { font-weight:600; text-decoration:none; color:#1B2A4A; transition:color .15s ease; }
@@ -266,13 +269,37 @@ def render_portfolio_tab():
     st.caption(f"Data source: Yahoo Finance (yfinance) · {base_returns.index.min().date()} → "
                f"{base_returns.index.max().date()} · {len(base_returns)} trading days")
 
-    weight_badges = " &nbsp; ".join(
+    holdings_badges = " &nbsp; ".join(
         f'{t} {abs(w):.1%} {badge("Long" if w >= 0 else "Short")}'
         for t, w in base_weights.items()
     )
-    st.markdown(weight_badges, unsafe_allow_html=True)
+    badge_line = holdings_badges
+    if hedge_weights_input:
+        hedge_badges = " &nbsp; ".join(
+            f'{t} {abs(w):.1%} {badge("Long" if w >= 0 else "Short")} '
+            f'<span class="hedge-tag">Hedge</span>'
+            for t, w in hedge_weights_input.items()
+        )
+        badge_line += '&nbsp; <span class="badge-sep">│</span> &nbsp;' + hedge_badges
+    st.markdown(badge_line, unsafe_allow_html=True)
     st.caption(f"Net exposure: {net_exposure(base_weights):.0%} · "
                f"Gross exposure: {gross_exposure(base_weights):.0%}")
+
+    st.markdown("##### Holdings Allocation")
+    with st.container(border=True):
+        pie_tickers = list(base_weights.keys())
+        pie_values = [abs(base_weights[t]) for t in pie_tickers]
+        pie_colors = ["#16a34a" if base_weights[t] >= 0 else "#dc2626" for t in pie_tickers]
+        fig = go.Figure(data=[go.Pie(
+            labels=pie_tickers, values=pie_values, marker=dict(colors=pie_colors,
+            line=dict(color="#FFFFFF", width=2)),
+            hole=0.45, textinfo="label+percent", texttemplate="%{label}<br>%{percent}",
+            textfont=dict(size=13),
+        )])
+        fig.update_layout(height=380, margin=dict(t=20, b=20), showlegend=False)
+        st.plotly_chart(fig, use_container_width=True, key="holdings_pie")
+        st.caption("Slice size = gross weight (magnitude); color indicates direction "
+                   "(green = long, red = short). Hedge instruments are shown separately above.")
 
     st.markdown("##### Headlines (by holding)")
     with st.container(border=True):
