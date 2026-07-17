@@ -1,10 +1,16 @@
 """Portfolio risk & performance dashboard, powered by Yahoo Finance (yfinance)."""
 import html
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from utils.correlation import (
+    aligned_returns, conditional_correlation, correlation_matrix,
+    dendrogram_figure, diversification_ratio, pairwise_stats,
+    pca_decomposition, risk_decomposition, rolling_correlation,
+)
 from utils.data import fetch_display_name, fetch_news, fetch_prices, fetch_quote
 from utils.metrics import (
     CHART_WINDOW_LABELS, drawdown_series, equity_curve, gross_exposure,
@@ -97,6 +103,10 @@ if missing:
 
 base_weights = {t: w for t, w in base_weights_raw.items() if t not in missing}
 hedge_weights_input = {t: w for t, w in hedge_weights_raw.items() if t not in missing}
+
+full_weights = dict(base_weights)
+for t, w in hedge_weights_input.items():
+    full_weights[t] = full_weights.get(t, 0) + w
 
 
 # ---------------------------------------------------------------- helpers --
@@ -396,6 +406,226 @@ def render_portfolio_tab():
                        "reduced tail risk.")
 
 
+# ------------------------------------------------------------ correlation --
+def render_corr_heatmap(corr: pd.DataFrame, title: str, key: str, zrange=(-1, 1)):
+    z = corr.values
+    fig = go.Figure(data=go.Heatmap(
+        z=z, x=list(corr.columns), y=list(corr.index),
+        zmin=zrange[0], zmax=zrange[1], colorscale="RdBu", reversescale=True,
+        text=np.round(z, 2), texttemplate="%{text}", textfont=dict(size=13),
+        colorbar=dict(title="ρ"),
+    ))
+    fig.update_layout(title=title, height=320 + 26 * len(corr), margin=dict(t=40, b=20))
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
+def render_correlation_tab():
+    valid_tickers = [t for t in all_tickers if t not in missing]
+    if len(valid_tickers) < 2:
+        st.info("Add at least 2 valid tickers (holdings or hedges) in the Controls tab to "
+                "compute correlations.")
+        return
+
+    R = aligned_returns(prices, valid_tickers)
+
+    st.title("Correlation & Risk Decomposition")
+    st.caption(
+        f"{len(valid_tickers)} instruments · {R.index.min().date()} → {R.index.max().date()} "
+        f"· {len(R)} overlapping trading days (dates on which every instrument has data)"
+    )
+
+    sub = st.tabs(["Correlation Matrix", "Rolling Correlation", "Risk Decomposition",
+                   "Tail Correlation", "PCA & Clustering"])
+
+    # -- Correlation matrix + significance -----------------------------
+    with sub[0]:
+        method_label = st.radio(
+            "Method", ["Pearson (linear)", "Spearman (rank)", "Kendall (concordance)"],
+            horizontal=True, key="corr_method",
+        )
+        method = {"Pearson (linear)": "pearson", "Spearman (rank)": "spearman",
+                  "Kendall (concordance)": "kendall"}[method_label]
+        corr = correlation_matrix(R, method=method)
+
+        st.markdown(f"##### {method_label} Correlation Matrix")
+        with st.container(border=True):
+            render_corr_heatmap(corr, f"{method_label} Correlation", key="corr_heatmap")
+
+        st.markdown("##### Pairwise Statistical Significance (Pearson)")
+        with st.container(border=True):
+            stats_df = pairwise_stats(R, confidence=confidence)
+            ci_label = f"{int(confidence*100)}% CI"
+            disp = pd.DataFrame({
+                "Pair": stats_df["Pair"],
+                "Pearson r": stats_df["Pearson r"].map(lambda v: f"{v:.3f}"),
+                ci_label: [f"[{lo:.3f}, {hi:.3f}]" for lo, hi in
+                           zip(stats_df["CI Low"], stats_df["CI High"])],
+                "p-value": stats_df["p-value"].map(lambda v: f"{v:.2e}" if v >= 1e-300 else "<1e-300"),
+                "N": stats_df["N"],
+                f"Significant (α={1-confidence:.2f})": stats_df["Significant"].map(
+                    lambda b: "Yes" if b else "No"),
+            })
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+            st.caption("Confidence intervals computed via Fisher z-transformation. Null "
+                       "hypothesis: ρ = 0. Uses the same confidence level configured in "
+                       "Controls → Risk Settings.")
+
+    # -- Rolling correlation --------------------------------------------
+    with sub[1]:
+        c1, c2, c3 = st.columns([1.5, 1.5, 1])
+        asset_a = c1.selectbox("Asset A", valid_tickers, index=0, key="roll_a")
+        remaining = [t for t in valid_tickers if t != asset_a] or valid_tickers
+        default_b_idx = valid_tickers.index(remaining[0])
+        asset_b = c2.selectbox("Asset B", valid_tickers, index=default_b_idx, key="roll_b")
+        window = c3.selectbox("Window (days)", [30, 60, 90, 120, 180], index=1, key="roll_window")
+
+        if asset_a == asset_b:
+            st.warning("Pick two different instruments to compare.")
+        else:
+            roll = rolling_correlation(R, asset_a, asset_b, window)
+            full_r = float(R[asset_a].corr(R[asset_b]))
+            with st.container(border=True):
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=roll.index, y=roll, line=dict(color="#3F6C9C", width=2),
+                                          name=f"{window}D rolling ρ"))
+                fig.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
+                fig.add_hline(y=full_r, line_dash="dash", line_color="#b45309",
+                              annotation_text=f"Full-sample ρ = {full_r:.2f}",
+                              annotation_position="bottom right")
+                fig.update_layout(title=f"{window}-Day Rolling Correlation: {asset_a} vs {asset_b}",
+                                   height=400, yaxis_range=[-1, 1], margin=dict(t=40, b=20),
+                                   hovermode="x unified")
+                st.plotly_chart(fig, use_container_width=True, key="roll_chart")
+            st.caption("Correlation is not stationary — a hedge's effectiveness, or a pair's "
+                       "diversification benefit, can drift materially over time as the rolling "
+                       "window shows.")
+
+    # -- Risk decomposition ----------------------------------------------
+    with sub[2]:
+        rd_weights = {t: full_weights[t] for t in valid_tickers if t in full_weights}
+        if len(rd_weights) < 2:
+            st.info("Need at least 2 weighted positions for a risk decomposition.")
+        else:
+            table, port_vol = risk_decomposition(R, rd_weights)
+            dr = diversification_ratio(table, port_vol)
+
+            st.markdown("##### Portfolio Volatility Decomposition")
+            with st.container(border=True):
+                stat_cols = st.columns(2)
+                _metric_cell(stat_cols[0], "Portfolio Ann. Volatility", port_vol, ".2%", NAVY)
+                _metric_cell(stat_cols[1], "Diversification Ratio", dr, ".2f", NAVY)
+                st.caption("Diversification Ratio = (Σ |wᵢ|·σᵢ) / σ_portfolio — the weighted "
+                           "average of standalone volatilities divided by actual portfolio "
+                           "volatility. Values above 1 mean correlation/hedging is reducing risk "
+                           "below the naive sum of the parts; 1.0 means no diversification benefit.")
+
+                disp = pd.DataFrame({
+                    "Weight": table["Weight"].map(lambda v: f"{v:.1%}"),
+                    "Standalone Ann. Vol": table["Standalone Ann. Vol"].map(lambda v: f"{v:.1%}"),
+                    "MCTR": table["MCTR"].map(lambda v: f"{v:.4f}"),
+                    "CCTR (Ann. Vol)": table["CCTR (Ann. Vol)"].map(lambda v: f"{v:.2%}"),
+                    "% of Portfolio Risk": table["% of Portfolio Risk"].map(lambda v: f"{v:.1f}%"),
+                }, index=table.index)
+                st.dataframe(disp, use_container_width=True)
+                st.caption("MCTR = ∂σₚ/∂wᵢ (marginal contribution to risk). CCTR = wᵢ · MCTRᵢ; "
+                           "component contributions sum exactly to portfolio volatility (Euler's "
+                           "homogeneous-function decomposition — verify: the % column sums to "
+                           "100%). A negative %  means that position is currently reducing total "
+                           "portfolio risk, i.e. it's acting as a genuine hedge right now.")
+
+            st.markdown("##### % Contribution to Portfolio Risk")
+            with st.container(border=True):
+                colors = ["#dc2626" if v < 0 else "#3F6C9C" for v in table["% of Portfolio Risk"]]
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=list(table.index), y=table["% of Portfolio Risk"], marker_color=colors,
+                    text=[f"{v:.1f}%" for v in table["% of Portfolio Risk"]], textposition="outside",
+                ))
+                fig.add_hline(y=0, line_color="#94a3b8")
+                fig.update_layout(height=360, margin=dict(t=30, b=20),
+                                   yaxis_title="% of Portfolio Risk")
+                st.plotly_chart(fig, use_container_width=True, key="risk_contrib_chart")
+
+    # -- Tail / conditional correlation ----------------------------------
+    with sub[3]:
+        quantile = st.slider("Stress quantile (worst X% of portfolio days)", 0.05, 0.25, 0.10,
+                              step=0.01, key="tail_quantile")
+        ref_weights = {t: full_weights[t] for t in valid_tickers if t in full_weights}
+        port_returns_full = portfolio_daily_returns(prices[list(ref_weights)], ref_weights)
+        full_corr, stress_corr, n_days, thresh = conditional_correlation(
+            R, port_returns_full, quantile=quantile)
+
+        st.caption(f"Stress sample: {n_days} days where the portfolio return was ≤ {thresh:.2%} "
+                   f"(the worst {quantile:.0%} of days in the overlapping sample).")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            with st.container(border=True):
+                render_corr_heatmap(full_corr, "Full-Sample Correlation", key="full_corr_hm")
+        with c2:
+            with st.container(border=True):
+                render_corr_heatmap(stress_corr, "Stress-Day Correlation", key="stress_corr_hm")
+
+        st.markdown("##### Correlation Shift in Stress (Stress − Full-Sample)")
+        with st.container(border=True):
+            delta = stress_corr - full_corr
+            max_abs = float(np.nanmax(np.abs(delta.values))) or 1.0
+            render_corr_heatmap(delta, "Δ Correlation (Stress − Full)", key="delta_corr_hm",
+                                 zrange=(-max_abs, max_abs))
+            st.caption("Positive values (red/orange) mean two assets become MORE correlated during the "
+                       "portfolio's worst days than on average — the classic 'correlations go to 1 "
+                       "in a crisis' effect that erodes diversification exactly when it's needed "
+                       "most. This is the quantitative version of the downturn risk discussed on "
+                       "the Portfolio tab's hedge comparison.")
+
+    # -- PCA & hierarchical clustering ------------------------------------
+    with sub[4]:
+        corr_pearson = correlation_matrix(R, method="pearson")
+        explained, loadings, eigenvalues = pca_decomposition(corr_pearson)
+
+        st.markdown("##### Explained Variance (Scree Plot)")
+        with st.container(border=True):
+            labels = [f"PC{i+1}" for i in range(len(explained))]
+            cum = np.cumsum(explained) * 100
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=labels, y=explained * 100, marker_color="#3F6C9C",
+                                  name="Individual",
+                                  text=[f"{v:.0%}" for v in explained], textposition="outside"))
+            fig.add_trace(go.Scatter(x=labels, y=cum, mode="lines+markers", name="Cumulative",
+                                      line=dict(color="#b45309", dash="dot")))
+            fig.update_layout(height=360, margin=dict(t=30, b=20),
+                               yaxis_title="% Variance Explained", legend=dict(orientation="h"))
+            st.plotly_chart(fig, use_container_width=True, key="scree_chart")
+            st.caption(
+                f"PC1 alone explains {explained[0]:.0%} of the correlation structure across your "
+                f"{len(valid_tickers)} instruments — a rough proxy for how much of the book's risk "
+                "comes from one dominant common factor versus genuinely independent bets. "
+                "Eigenvalues: " + ", ".join(f"{v:.2f}" for v in eigenvalues) +
+                f" (sum = {eigenvalues.sum():.1f} = number of instruments, as expected for a "
+                "correlation matrix)."
+            )
+
+        st.markdown("##### Factor Loadings")
+        with st.container(border=True):
+            n_show = min(3, loadings.shape[1])
+            render_corr_heatmap(loadings.iloc[:, :n_show], "PC Loadings", key="loadings_hm")
+            st.caption("Assets with the same sign on a component move together on that factor; "
+                       "opposite signs move against each other on that factor.")
+
+        st.markdown("##### Hierarchical Clustering (Correlation Distance)")
+        with st.container(border=True):
+            dendro = dendrogram_figure(corr_pearson)
+            tickvals = list(dendro.layout.xaxis.tickvals or [])
+            if len(tickvals) > 1:
+                pad = (tickvals[1] - tickvals[0]) / 2
+                dendro.update_layout(xaxis_range=[min(tickvals) - pad, max(tickvals) + pad])
+            dendro.update_layout(height=380, margin=dict(t=30, b=20), showlegend=False)
+            st.plotly_chart(dendro, use_container_width=True, key="dendrogram_chart")
+            st.caption("Distance = √(0.5·(1−ρ)), average linkage. Assets that merge at low height "
+                       "are highly correlated and offer little diversification against each other; "
+                       "assets that merge only at the top are close to independent.")
+
+
 def _sync_weight(item: dict, source: str):
     w_key, n_key = f"w_{item['id']}", f"wn_{item['id']}"
     if source == "slider":
@@ -493,15 +723,18 @@ def render_controls_tab():
 tab_tickers = list(dict.fromkeys(
     [h["ticker"] for h in holdings] + [g["ticker"] for g in hedges]
 ))
-tab_labels = ["Portfolio"] + tab_tickers + ["Controls"]
+tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Controls"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
     render_portfolio_tab()
 
-for ticker, tab in zip(tab_tickers, tabs[1:-1]):
+for ticker, tab in zip(tab_tickers, tabs[1:len(tab_tickers) + 1]):
     with tab:
         render_ticker_tab(ticker)
+
+with tabs[-2]:
+    render_correlation_tab()
 
 with tabs[-1]:
     render_controls_tab()
