@@ -311,22 +311,13 @@ def render_portfolio_tab():
             with st.container(border=True):
                 st.markdown("**Without Hedge**")
                 render_weights_pie(base_weights, key="holdings_pie_nohedge")
-                st.caption(f"Holdings only · Gross exposure {gross_exposure(base_weights):.0%}. "
-                           "Slice size = gross weight; color = direction "
-                           "(green = long, red = short).")
         with pc2:
             with st.container(border=True):
                 st.markdown("**With Hedge**")
                 render_weights_pie(full_weights, key="holdings_pie_hedge")
-                st.caption(f"Holdings + hedge overlay · Gross exposure {gross_exposure(full_weights):.0%}. "
-                           "Adding the hedge slice proportionally shrinks every other slice's "
-                           "share of the pie.")
     else:
         with st.container(border=True):
             render_weights_pie(base_weights, key="holdings_pie_nohedge")
-            st.caption("Slice size = gross weight (magnitude); color indicates direction "
-                       "(green = long, red = short). Add a hedge in the Controls tab to see a "
-                       "second, hedge-adjusted pie chart here.")
 
     st.markdown("##### Headlines (by holding)")
     with st.container(border=True):
