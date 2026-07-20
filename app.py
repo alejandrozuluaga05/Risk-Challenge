@@ -263,6 +263,20 @@ def render_metric_cards(m: dict):
     _metric_cell(row2[3], cvar_key, m[cvar_key], ".2%", AMBER)
 
 
+def render_weights_pie(weights: dict, key: str):
+    tickers = list(weights.keys())
+    values = [abs(weights[t]) for t in tickers]
+    colors = ["#16a34a" if weights[t] >= 0 else "#dc2626" for t in tickers]
+    fig = go.Figure(data=[go.Pie(
+        labels=tickers, values=values, marker=dict(colors=colors,
+        line=dict(color="#FFFFFF", width=2)),
+        hole=0.45, textinfo="label+percent", texttemplate="%{label}<br>%{percent}",
+        textfont=dict(size=13),
+    )])
+    fig.update_layout(height=380, margin=dict(t=20, b=20), showlegend=False)
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
 def render_portfolio_tab():
     if not base_weights:
         st.warning("No valid holdings to compute a portfolio. Fix tickers in the Controls tab.")
@@ -291,20 +305,28 @@ def render_portfolio_tab():
                f"Gross exposure: {gross_exposure(base_weights):.0%}")
 
     st.markdown("##### Holdings Allocation")
-    with st.container(border=True):
-        pie_tickers = list(base_weights.keys())
-        pie_values = [abs(base_weights[t]) for t in pie_tickers]
-        pie_colors = ["#16a34a" if base_weights[t] >= 0 else "#dc2626" for t in pie_tickers]
-        fig = go.Figure(data=[go.Pie(
-            labels=pie_tickers, values=pie_values, marker=dict(colors=pie_colors,
-            line=dict(color="#FFFFFF", width=2)),
-            hole=0.45, textinfo="label+percent", texttemplate="%{label}<br>%{percent}",
-            textfont=dict(size=13),
-        )])
-        fig.update_layout(height=380, margin=dict(t=20, b=20), showlegend=False)
-        st.plotly_chart(fig, use_container_width=True, key="holdings_pie")
-        st.caption("Slice size = gross weight (magnitude); color indicates direction "
-                   "(green = long, red = short). Hedge instruments are shown separately above.")
+    if hedge_weights_input:
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            with st.container(border=True):
+                st.markdown("**Without Hedge**")
+                render_weights_pie(base_weights, key="holdings_pie_nohedge")
+                st.caption(f"Holdings only · Gross exposure {gross_exposure(base_weights):.0%}. "
+                           "Slice size = gross weight; color = direction "
+                           "(green = long, red = short).")
+        with pc2:
+            with st.container(border=True):
+                st.markdown("**With Hedge**")
+                render_weights_pie(full_weights, key="holdings_pie_hedge")
+                st.caption(f"Holdings + hedge overlay · Gross exposure {gross_exposure(full_weights):.0%}. "
+                           "Adding the hedge slice proportionally shrinks every other slice's "
+                           "share of the pie.")
+    else:
+        with st.container(border=True):
+            render_weights_pie(base_weights, key="holdings_pie_nohedge")
+            st.caption("Slice size = gross weight (magnitude); color indicates direction "
+                       "(green = long, red = short). Add a hedge in the Controls tab to see a "
+                       "second, hedge-adjusted pie chart here.")
 
     st.markdown("##### Headlines (by holding)")
     with st.container(border=True):
