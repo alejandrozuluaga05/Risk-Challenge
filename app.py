@@ -803,17 +803,6 @@ def render_growth_scare_content(full_port_ret: pd.Series, merged_rets: pd.DataFr
                 "matters most."
             )
 
-    st.markdown("###### Mitigations")
-    with st.container(border=True):
-        st.markdown(
-            "Don't rely on short duration as the book's safety valve, it's actually a "
-            "source of correlated risk in exactly this scenario, not a diversifier. Consider "
-            "a genuinely uncorrelated asset (gold, cash) sized specifically for a growth-scare "
-            "scenario; watch the Correlation tab's tail-correlation view for early signs "
-            "this dynamic is building; and size the SOXX hedge knowing it protects best "
-            "against semis-specific shocks, not broad macro panics."
-        )
-
 
 def render_optimal_hedge_content(base_port_ret: pd.Series, merged_rets: pd.DataFrame,
                                   candidate_tickers: list):
