@@ -956,119 +956,112 @@ def render_risk_scenarios_tab():
         render_save_export_content()
 
 
-# --------------------------------------------------------------- glossary --
-CALC_SECTIONS = [
-    ("Performance Metrics", [
-        ("Portfolio Return", r"r_{p,t} = \sum_i w_i \, r_{i,t}",
-         "Each day's portfolio return is the weighted sum of every position's return — "
-         "positive weights for longs, negative for shorts."),
-        ("Total Return", r"\prod_{t=1}^{N}(1+r_t) \;-\; 1",
-         "The total compounded gain or loss over the full period, including the effect of "
-         "compounding day to day."),
-        ("CAGR", r"(1+R_{\text{total}})^{252/N} \;-\; 1",
-         "Total return re-expressed as a constant annual growth rate, so periods of different "
-         "lengths can be compared apples-to-apples."),
-        ("Annualized Volatility", r"\sigma_{\text{ann}} = \sigma_{\text{daily}} \times \sqrt{252}",
-         "How much daily returns typically swing, scaled up to a yearly figure — the standard "
-         "measure of risk."),
-        ("Sharpe Ratio", r"\text{Sharpe} = \frac{\bar{r} - r_f/252}{\sigma_{\text{daily}}} \times \sqrt{252}",
-         "Return earned per unit of risk taken, above the risk-free rate — higher means better "
-         "risk-adjusted performance."),
-        ("Max Drawdown", r"\min_t \left(\frac{E_t}{\max_{k \le t} E_k} - 1\right)",
-         "The worst peak-to-trough loss the portfolio has experienced — a gut-check on how bad "
-         "it can get before recovering."),
-    ]),
-    ("Risk Metrics: VaR & CVaR", [
-        ("Historical VaR", r"VaR_c = -\,\text{Percentile}\big(r,\;100(1-c)\big)",
-         "The loss you'd expect to exceed only (1-c) of the time — e.g. 95% VaR is the "
-         "threshold breached on the worst 5% of days."),
-        ("Historical CVaR (Expected Shortfall)", r"CVaR_c = -\,\mathbb{E}\big[\,r \mid r \le -VaR_c\,\big]",
-         "The average loss on those worst days beyond VaR — answers \"how bad is bad\", not "
-         "just \"how often\"."),
-    ]),
-    ("Correlation & Diversification", [
-        ("Pearson Correlation", r"\rho_{XY} = \frac{\text{Cov}(X,Y)}{\sigma_X\,\sigma_Y}",
-         "How closely two assets move together linearly, from -1 (perfect opposite) to +1 "
-         "(perfect together)."),
-        ("Spearman / Kendall Correlation", r"\rho_S = \rho_{\text{Pearson}}\big(\text{rank}(X),\,\text{rank}(Y)\big)",
-         "Correlation based on the ranking of returns rather than their exact values — catches "
-         "non-linear relationships Pearson can miss."),
-        ("Correlation Confidence Interval", r"z=\tanh^{-1}(\rho),\qquad SE=\frac{1}{\sqrt{n-3}}",
-         "The Fisher z-transform turns a correlation into something normally distributed, so we "
-         "can put a statistically valid confidence band around it."),
-        ("Portfolio Variance", r"\sigma_p^2 = w^{\top}\Sigma\,w",
-         "The total risk of the portfolio, accounting for every position's own volatility AND "
-         "how they move together (the covariance matrix Σ)."),
-        ("Marginal Contribution to Risk (MCTR)", r"MCTR_i = \frac{(\Sigma w)_i}{\sigma_p}",
-         "How much portfolio risk would change for a tiny increase in one position's weight — "
-         "the \"risk price\" of each holding."),
-        ("Component Contribution to Risk (CCTR)", r"CCTR_i = w_i \times MCTR_i",
-         "Each position's actual slice of total portfolio risk; these add up exactly to the "
-         "portfolio's volatility."),
-        ("Diversification Ratio", r"DR = \frac{\sum_i |w_i|\,\sigma_i}{\sigma_p}",
-         "How much risk reduction you're getting from diversification — above 1 means the mix "
-         "is genuinely safer than the sum of its parts."),
-        ("Clustering Distance", r"d_{ij} = \sqrt{0.5\,(1-\rho_{ij})}",
-         "Turns correlation into a proper \"distance\" between two assets, used to group "
-         "similar (redundant) positions together."),
-        ("Principal Component Analysis", r"\Sigma_{\text{corr}}\,v = \lambda\,v",
-         "Breaks the correlation structure into independent \"factors\" — the first factor "
-         "usually captures the single biggest common driver of risk."),
-    ]),
-    ("Factor Model & Scenario Shocks", [
-        ("Market Model (Beta Regression)", r"r_p = \alpha + \beta\, r_{\text{mkt}} + \varepsilon",
-         "Splits portfolio returns into a part explained by the overall market (β) and a part "
-         "that's idiosyncratic (ε) — the basis for stress testing."),
-        ("Beta", r"\beta = \frac{\text{Cov}(r_p,\,r_{\text{mkt}})}{\text{Var}(r_{\text{mkt}})}",
-         "How sensitive the portfolio is to market-wide moves — a beta of 0.5 means roughly "
-         "half the market's swing, in the same direction."),
-        ("Scenario Shock P&L", r"\Delta P = \beta_p \times S",
-         "A quick estimate of portfolio impact if the market instantly moved by S% — the pure "
-         "systematic, beta-driven effect."),
-        ("Stressed VaR (SVaR)", r"SVaR = -(\mu + z_{1-c}\,\sigma_{\text{resid}})",
-         "VaR recalculated assuming the market has just made the scenario move — captures "
-         "downside risk specific to your positions, on top of the market shock."),
-        ("Stressed CVaR (SCVaR)", r"SCVaR = -\left(\mu - \sigma_{\text{resid}}\frac{\phi(z_{1-c})}{1-c}\right)",
-         "The average tail loss under that same shocked scenario — the \"how bad is bad\" "
-         "version of Stressed VaR."),
-    ]),
-    ("Hedging", [
-        ("Optimal Hedge Ratio", r"h^{*} = -\frac{\text{Cov}(r_p,\,r_h)}{\text{Var}(r_h)}",
-         "The exact amount of a hedge instrument that minimizes portfolio variance — more or "
-         "less than this, and you're leaving risk reduction on the table."),
-        ("Hedge Effectiveness", r"HE = \rho_{p,h}^{2}",
-         "The maximum fraction of portfolio variance a given hedge instrument can possibly "
-         "remove, if sized optimally."),
-    ]),
-    ("Benchmark Comparison", [
-        ("Annualized Alpha", r"\alpha_{\text{ann}} = \alpha_{\text{daily}} \times 252",
-         "Return earned above (or below) what the portfolio's market exposure alone would "
-         "predict — the \"skill\" component."),
-        ("Tracking Error", r"TE = \sigma(r_p - r_b)\times\sqrt{252}",
-         "How much the portfolio's returns wander away from the benchmark's, day to day — "
-         "higher means bigger benchmark-relative swings."),
-        ("Information Ratio", r"IR = \frac{\overline{(r_p - r_b)}\times 252}{TE}",
-         "Excess return earned per unit of tracking error — the benchmark-relative version of "
-         "the Sharpe ratio."),
-        ("Up/Down Capture Ratio", r"UC = \frac{\overline{\,r_p \mid r_b>0\,}}{\overline{\,r_b \mid r_b>0\,}}",
-         "What fraction of the benchmark's up days (or down days) the portfolio participates "
-         "in — ideally high on up days, low on down days."),
-    ]),
-]
+# -------------------------------------------------------------------- beta --
+def render_beta_tab():
+    valid_tickers = [t for t in all_tickers if t not in missing]
+    if not base_weights or not valid_tickers:
+        st.warning("Add at least one valid holding in the Controls tab to see beta analysis.")
+        return
 
+    with st.spinner("Pulling SPY data from Yahoo Finance..."):
+        try:
+            bench_prices = fetch_prices(("SPY",), period="max")
+        except Exception as e:
+            st.error(f"Failed to fetch benchmark data: {e}")
+            return
 
-def render_calculations_tab():
-    st.title("Calculations")
-    st.caption("Every formula used elsewhere in this dashboard, in one place — the exact "
-               "calculation, followed by a plain-English read of what it tells you.")
+    needed = sorted(set(base_weights) | set(full_weights))
+    merged_prices = prices[needed].join(bench_prices, how="inner")
+    merged_rets = merged_prices.pct_change().dropna(how="any")
 
-    for section_title, items in CALC_SECTIONS:
-        st.markdown(f"#### {section_title}")
-        for name, formula, meaning in items:
-            with st.container(border=True):
-                st.markdown(f"**{name}**")
-                st.latex(formula)
-                st.caption(meaning)
+    base_port_ret = (merged_rets[list(base_weights)] * pd.Series(base_weights)).sum(axis=1)
+    full_port_ret = (merged_rets[list(full_weights)] * pd.Series(full_weights)).sum(axis=1)
+    spy_ret = merged_rets["SPY"]
+    has_hedge = bool(hedge_weights_input)
+
+    mm_base = market_model(base_port_ret, spy_ret)
+    mm_full = market_model(full_port_ret, spy_ret) if has_hedge else mm_base
+    ind_betas = asset_betas(merged_rets, spy_ret, list(full_weights))
+
+    st.title("Beta")
+    st.caption("How sensitive your portfolio is to the overall market (SPY) — and what that "
+               "means in plain terms, not statistics.")
+
+    st.markdown("##### What Is Beta?")
+    with st.container(border=True):
+        st.markdown(
+            "Beta measures how much a position tends to move for every 1% move in the overall "
+            "market. A beta of **1.0** means it moves roughly in lockstep with the market. "
+            "**Above 1** means it swings *more* than the market — more sensitive, more "
+            "amplified. **Below 1** means it swings *less*. A **negative** beta means it "
+            "tends to move in the *opposite* direction. It's a quick, intuitive gut-check for "
+            "how much market-wide risk you're carrying, separate from stock-specific news."
+        )
+
+    st.markdown("##### Your Portfolio's Beta")
+    with st.container(border=True):
+        if has_hedge:
+            cols = st.columns(2)
+            _metric_cell(cols[0], "Unhedged Beta", mm_base["beta"], "+.2f", NAVY)
+            _metric_cell(cols[1], "Hedged Beta", mm_full["beta"], "+.2f", NAVY)
+            delta = mm_full["beta"] - mm_base["beta"]
+            st.caption(
+                f"Shorting the hedge pulls portfolio beta down by about {abs(delta):.2f} — from "
+                f"{mm_base['beta']:.2f} to {mm_full['beta']:.2f}. That's the intuition for why "
+                "the hedge works: the hedge instrument itself has a high beta, so holding it "
+                "short subtracts market sensitivity instead of adding it."
+            )
+        else:
+            _metric_cell(st, "Portfolio Beta", mm_base["beta"], "+.2f", NAVY)
+            st.caption("No hedge configured yet in the Controls tab — this is the beta of your "
+                       "holdings alone.")
+
+    st.markdown("##### Per-Instrument Beta")
+    with st.container(border=True):
+        items = sorted(full_weights.items(), key=lambda kv: -abs(ind_betas.get(kv[0], 0)))
+        tickers_sorted = [t for t, _ in items]
+        betas_sorted = [ind_betas.get(t, float("nan")) for t in tickers_sorted]
+        colors = ["#3F6C9C" if b >= 0 else "#dc2626" for b in betas_sorted]
+        fig = go.Figure(go.Bar(x=tickers_sorted, y=betas_sorted, marker_color=colors,
+                                text=[f"{b:.2f}" for b in betas_sorted], textposition="outside"))
+        fig.add_hline(y=1, line_dash="dot", line_color="#94a3b8",
+                       annotation_text="Market (β = 1.0)", annotation_position="top left")
+        fig.add_hline(y=0, line_color="#94a3b8")
+        fig.update_layout(height=340, margin=dict(t=30, b=20), yaxis_title="Beta to SPY")
+        st.plotly_chart(fig, use_container_width=True, key="beta_bar")
+
+        for t, w in items:
+            b = ind_betas.get(t, float("nan"))
+            direction = "Long" if w >= 0 else "Short"
+            if b >= 1.3:
+                read = "notably more sensitive to the market than average"
+            elif b >= 0.7:
+                read = "moves roughly in line with the market"
+            elif b >= -0.2:
+                read = "largely disconnected from day-to-day market swings"
+            else:
+                read = "tends to move against the market"
+            st.markdown(f"**{t}** ({direction}, β={b:.2f}) — {read}.")
+
+    st.markdown("##### What a -10% Market Move Would Mean")
+    with st.container(border=True):
+        shock = -0.10
+        base_move = mm_base["beta"] * shock
+        full_move = mm_full["beta"] * shock
+        if has_hedge:
+            cols = st.columns(2)
+            _metric_cell(cols[0], "Unhedged: Expected Move", base_move, "+.1%",
+                         RED if base_move < 0 else GREEN)
+            _metric_cell(cols[1], "Hedged: Expected Move", full_move, "+.1%",
+                         RED if full_move < 0 else GREEN)
+        else:
+            _metric_cell(st, "Expected Move", base_move, "+.1%", RED if base_move < 0 else GREEN)
+        st.caption(
+            "This is simply beta × market move — a fast, intuitive read on the 'market-wide' "
+            "slice of your risk, not a statistical worst-case estimate. Real results will "
+            "differ day to day on stock-specific news, but this is the direction and rough "
+            "scale you'd expect if the market dropped 10%."
+        )
 
 
 def _sync_weight(item: dict, source: str):
@@ -1174,7 +1167,7 @@ def render_controls_tab():
 tab_tickers = list(dict.fromkeys(
     [h["ticker"] for h in holdings] + [g["ticker"] for g in hedges]
 ))
-tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Risk Scenarios", "Calculations", "Controls"]
+tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Risk Scenarios", "Beta", "Controls"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -1191,7 +1184,7 @@ with tabs[-3]:
     render_risk_scenarios_tab()
 
 with tabs[-2]:
-    render_calculations_tab()
+    render_beta_tab()
 
 with tabs[-1]:
     render_controls_tab()

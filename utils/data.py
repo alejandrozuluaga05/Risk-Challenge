@@ -10,10 +10,9 @@ def fetch_prices(tickers: tuple, period: str = "max") -> pd.DataFrame:
     raw = yf.download(list(tickers), period=period, auto_adjust=True,
                        progress=False, group_by="ticker")
 
-    if len(tickers) == 1:
-        close = raw["Close"].to_frame(name=tickers[0])
-    else:
-        close = pd.DataFrame({t: raw[t]["Close"] for t in tickers})
+    # yfinance always groups by ticker (even for a single ticker) when
+    # group_by="ticker" is set, so this indexing works for any tickers length.
+    close = pd.DataFrame({t: raw[t]["Close"] for t in tickers})
 
     close = close.sort_index().ffill().dropna(how="all")
     return close
