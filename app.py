@@ -1043,26 +1043,6 @@ def render_beta_tab():
                 read = "tends to move against the market"
             st.markdown(f"**{t}** ({direction}, β={b:.2f}) — {read}.")
 
-    st.markdown("##### What a -10% Market Move Would Mean")
-    with st.container(border=True):
-        shock = -0.10
-        base_move = mm_base["beta"] * shock
-        full_move = mm_full["beta"] * shock
-        if has_hedge:
-            cols = st.columns(2)
-            _metric_cell(cols[0], "Unhedged: Expected Move", base_move, "+.1%",
-                         RED if base_move < 0 else GREEN)
-            _metric_cell(cols[1], "Hedged: Expected Move", full_move, "+.1%",
-                         RED if full_move < 0 else GREEN)
-        else:
-            _metric_cell(st, "Expected Move", base_move, "+.1%", RED if base_move < 0 else GREEN)
-        st.caption(
-            "This is simply beta × market move — a fast, intuitive read on the 'market-wide' "
-            "slice of your risk, not a statistical worst-case estimate. Real results will "
-            "differ day to day on stock-specific news, but this is the direction and rough "
-            "scale you'd expect if the market dropped 10%."
-        )
-
 
 def _sync_weight(item: dict, source: str):
     w_key, n_key = f"w_{item['id']}", f"wn_{item['id']}"
