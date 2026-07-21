@@ -672,60 +672,6 @@ def render_correlation_tab():
 
 
 # --------------------------------------------------------- risk scenarios --
-SCENARIO_DEFS = [("Down 10%", -0.10), ("Down 5%", -0.05), ("Down 1%", -0.01),
-                  ("Up 1%", 0.01), ("Up 5%", 0.05), ("Up 10%", 0.10)]
-
-# Curated, thematic tail risks for the current AI Infrastructure Supercycle bet
-# (long AVGO/copper, short duration, hedged with SOXX). Narrative, not statistical —
-# worth rewriting if the portfolio's composition or theme changes materially.
-def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, has_hedge: bool, ind_betas: dict):
-    st.markdown(f"##### Scenario: Economy (SPY) moves {pct:+.0%}")
-
-    rows = []
-    for name, mm in [("Before Hedge", mm_base)] + (
-            [("After Hedge", mm_full)] if has_hedge else []):
-        rows.append({"Portfolio": name, "Beta to SPY": mm["beta"], "Shock P&L": mm["beta"] * pct})
-    df = pd.DataFrame(rows).set_index("Portfolio")
-
-    with st.container(border=True):
-        cols = st.columns(len(rows))
-        for col, (name, r) in zip(cols, zip(df.index, rows)):
-            _metric_cell(col, f"{name}: Scenario Shock P&L", r["Shock P&L"], "+.2%",
-                         GREEN if r["Shock P&L"] >= 0 else RED)
-
-        disp = pd.DataFrame({
-            "Beta to SPY": df["Beta to SPY"].map(lambda v: f"{v:.3f}"),
-            "Shock P&L": df["Shock P&L"].map(lambda v: f"{v:+.2%}"),
-        }, index=df.index)
-        st.dataframe(disp, use_container_width=True)
-        st.caption(
-            "Shock P&L = beta to SPY x scenario move — a simple read on how much the "
-            "portfolio's market sensitivity would translate this move into gain or loss."
-        )
-
-    st.markdown("###### Per-Instrument Shock Contribution (Full Portfolio, incl. hedge)")
-    with st.container(border=True):
-        rows2 = []
-        for t, w in full_weights.items():
-            b = ind_betas.get(t, np.nan)
-            rows2.append({"Ticker": t, "Weight": w, "Beta to SPY": b, "Contribution": w * b * pct})
-        df2 = pd.DataFrame(rows2).set_index("Ticker")
-        colors = ["#dc2626" if v < 0 else "#3F6C9C" for v in df2["Contribution"]]
-        fig = go.Figure(go.Bar(x=list(df2.index), y=df2["Contribution"] * 100, marker_color=colors,
-                                text=[f"{v:+.2%}" for v in df2["Contribution"]], textposition="outside"))
-        fig.add_hline(y=0, line_color="#94a3b8")
-        fig.update_layout(height=320, margin=dict(t=20, b=20), yaxis_title="Contribution to Shock P&L (%)")
-        st.plotly_chart(fig, use_container_width=True, key=f"shock_contrib_{pct}")
-        disp2 = pd.DataFrame({
-            "Weight": df2["Weight"].map(lambda v: f"{v:+.1%}"),
-            "Beta to SPY": df2["Beta to SPY"].map(lambda v: f"{v:.3f}"),
-            "Contribution to Shock P&L": df2["Contribution"].map(lambda v: f"{v:+.3%}"),
-        }, index=df2.index)
-        st.dataframe(disp2, use_container_width=True)
-        st.caption(f"Contributions sum to {df2['Contribution'].sum():+.3%}, matching the full "
-                   f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
-
-
 def render_growth_scare_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame, ind_betas: dict):
     valid_full = {t: w for t, w in full_weights.items() if t in merged_rets.columns}
     if len(valid_full) < 2:
@@ -1063,24 +1009,19 @@ def render_risk_scenarios_tab():
         f"Full portfolio β = {mm_full['beta']:.3f} (R² = {mm_full['r_squared']:.1%})."
     )
 
-    sub_labels = ([s[0] for s in SCENARIO_DEFS] +
-                  ["Growth Scare", "Optimal Hedge", "Benchmark Comparison", "Save / Export"])
+    sub_labels = ["Growth Scare", "Optimal Hedge", "Benchmark Comparison", "Save / Export"]
     sub = st.tabs(sub_labels)
 
-    for (_, pct), tab in zip(SCENARIO_DEFS, sub[:6]):
-        with tab:
-            render_scenario_content(pct, mm_base, mm_full, has_hedge, ind_betas)
-
-    with sub[6]:
+    with sub[0]:
         render_growth_scare_content(full_port_ret, merged_rets, ind_betas)
 
-    with sub[7]:
+    with sub[1]:
         render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
 
-    with sub[8]:
+    with sub[2]:
         render_benchmark_content(base_port_ret, full_port_ret, spy_ret, ief_ret, has_hedge)
 
-    with sub[9]:
+    with sub[3]:
         render_save_export_content()
 
 
