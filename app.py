@@ -20,7 +20,7 @@ from utils.metrics import (
 )
 from utils.scenarios import (
     asset_betas, benchmark_stats, hedged_variance, market_model,
-    optimal_hedge_ratio, stressed_var_cvar, variance_curve,
+    optimal_hedge_ratio, variance_curve,
 )
 
 NAVY, GREEN, RED, AMBER = "#1B2A4A", "#16a34a", "#dc2626", "#b45309"
@@ -39,9 +39,6 @@ st.markdown("""
 .hedge-tag { font-size:0.65rem; font-weight:700; color:#5B6B82; text-transform:uppercase;
   letter-spacing:.04em; }
 .badge-sep { color:#C9D2DC; font-weight:400; }
-.badge-neutral { background:rgba(63,108,156,0.12); color:#3F6C9C;
-  border:1px solid rgba(63,108,156,0.35); }
-.badge-worst { background:#C0392B; color:#FFFFFF; font-size:0.68rem; }
 .news-item { padding:10px 2px; border-bottom:1px solid rgba(27,42,74,0.08); }
 .news-item:last-child { border-bottom:none; }
 .news-title { font-weight:600; text-decoration:none; color:#1B2A4A; transition:color .15s ease; }
@@ -681,101 +678,13 @@ SCENARIO_DEFS = [("Down 10%", -0.10), ("Down 5%", -0.05), ("Down 1%", -0.01),
 # Curated, thematic tail risks for the current AI Infrastructure Supercycle bet
 # (long AVGO/copper, short duration, hedged with SOXX). Narrative, not statistical —
 # worth rewriting if the portfolio's composition or theme changes materially.
-TAIL_RISKS = [
-    {
-        "group": "Breaks the AI Infrastructure Thesis",
-        "items": [
-            {
-                "title": "Data center buildout gets regulated",
-                "body": "Local and national governments are increasingly scrutinizing data "
-                        "centers over power and water use. A wave of building moratoriums, "
-                        "environmental reviews, or grid-connection delays (already happening "
-                        "in parts of Virginia and Ireland) could slow the physical buildout "
-                        "that both chip demand and copper wiring depend on.",
-                "hits": ["AVGO", "HGZ26.CMX"],
-            },
-            {
-                "title": "Hyperscaler capex pullback",
-                "body": "If Microsoft, Google, Amazon, or Meta signal disappointment in AI "
-                        "returns and cut infrastructure spending guidance, semiconductor "
-                        "demand assumptions reset sharply lower — a handful of hyperscalers "
-                        "drive the bulk of AI chip orders.",
-                "hits": ["AVGO", "SOXX"],
-            },
-            {
-                "title": "An efficiency breakthrough shrinks compute demand",
-                "body": "A “DeepSeek moment,” a new model architecture that delivers "
-                        "similar AI capability with far fewer chips, would undercut the "
-                        "assumption that AI needs ever more hardware. It's happened once "
-                        "already and can happen again.",
-                "hits": ["AVGO", "SOXX"],
-            },
-            {
-                "title": "China/Taiwan chip supply shock",
-                "body": "Export controls, sanctions, or a Taiwan Strait crisis affecting TSMC "
-                        "(which fabricates AVGO's chips) would hit the semiconductor complex "
-                        "directly and could spike volatility sector-wide.",
-                "hits": ["AVGO", "SOXX"],
-            },
-        ],
-    },
-    {
-        "group": "Breaks the Rates Thesis",
-        "items": [
-            {
-                "title": "Sudden fiscal discipline",
-                "body": "A surprise bipartisan deficit deal or spending freeze would remove "
-                        "the “structurally higher issuance, higher yields” logic "
-                        "behind the short Treasury position, letting yields fall and the "
-                        "short lose money.",
-                "hits": ["ZN=F"],
-            },
-            {
-                "title": "Growth Scare",
-                "body": "A sharp growth scare sends investors rushing into Treasuries for "
-                        "safety, rallying bond prices exactly when equities and copper are "
-                        "also selling off — an “everything loses at once” scenario.",
-                "hits": ["ZN=F", "AVGO", "HGZ26.CMX"],
-                "worst": True,
-            },
-        ],
-    },
-    {
-        "group": "Copper-Specific",
-        "items": [
-            {
-                "title": "Copper supply glut or substitution",
-                "body": "Major new mine supply (Congo, Peru expansions) or wider aluminum "
-                        "substitution in wiring could undercut the “copper is "
-                        "structurally scarce” thesis behind the position.",
-                "hits": ["HGZ26.CMX"],
-            },
-            {
-                "title": "Global manufacturing slowdown",
-                "body": "A China property-style demand shock or broad industrial slowdown "
-                        "would hit copper demand independent of the AI narrative.",
-                "hits": ["HGZ26.CMX"],
-            },
-        ],
-    },
-]
-
-
-def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_ret: pd.Series,
-                             full_port_ret: pd.Series, has_hedge: bool, ind_betas: dict):
+def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, has_hedge: bool, ind_betas: dict):
     st.markdown(f"##### Scenario: Economy (SPY) moves {pct:+.0%}")
 
     rows = []
-    for name, mm, ret in [("Before Hedge", mm_base, base_port_ret)] + (
-            [("After Hedge", mm_full, full_port_ret)] if has_hedge else []):
-        svar, scvar, mu = stressed_var_cvar(mm["beta"], pct, mm["residual_std"], confidence)
-        rows.append({
-            "Portfolio": name, "Beta to SPY": mm["beta"], "Shock P&L": mu,
-            "Baseline VaR": historical_var(ret, confidence),
-            "Stressed VaR": svar,
-            "Baseline CVaR": historical_cvar(ret, confidence),
-            "Stressed CVaR": scvar,
-        })
+    for name, mm in [("Before Hedge", mm_base)] + (
+            [("After Hedge", mm_full)] if has_hedge else []):
+        rows.append({"Portfolio": name, "Beta to SPY": mm["beta"], "Shock P&L": mm["beta"] * pct})
     df = pd.DataFrame(rows).set_index("Portfolio")
 
     with st.container(border=True):
@@ -784,25 +693,14 @@ def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_
             _metric_cell(col, f"{name}: Scenario Shock P&L", r["Shock P&L"], "+.2%",
                          GREEN if r["Shock P&L"] >= 0 else RED)
 
-        cl = f"{int(confidence*100)}%"
         disp = pd.DataFrame({
             "Beta to SPY": df["Beta to SPY"].map(lambda v: f"{v:.3f}"),
             "Shock P&L": df["Shock P&L"].map(lambda v: f"{v:+.2%}"),
-            f"Baseline VaR {cl}": df["Baseline VaR"].map(lambda v: f"{v:.2%}"),
-            f"Stressed VaR {cl}": df["Stressed VaR"].map(
-                lambda v: f"{v:.2%}" if v >= 0 else f"({-v:.2%} gain)"),
-            f"Baseline CVaR {cl}": df["Baseline CVaR"].map(lambda v: f"{v:.2%}"),
-            f"Stressed CVaR {cl}": df["Stressed CVaR"].map(
-                lambda v: f"{v:.2%}" if v >= 0 else f"({-v:.2%} gain)"),
         }, index=df.index)
         st.dataframe(disp, use_container_width=True)
         st.caption(
-            "Shock P&L = βₚ × scenario move, from a single-factor OLS regression of portfolio "
-            "returns on SPY. Stressed VaR/CVaR re-center the portfolio's residual (idiosyncratic, "
-            "market-orthogonal) volatility around that shock: SVaR = -(μ+z·σ), "
-            "SCVaR = -(μ-σ·φ(z)/(1-c)), where μ = shock P&L, σ = daily residual std, "
-            "z = Φ⁻¹(1-c). Both formulas verified against 2M-draw Monte Carlo simulation. A "
-            "negative value means even the worst-case tail under this scenario is still a gain."
+            "Shock P&L = beta to SPY x scenario move — a simple read on how much the "
+            "portfolio's market sensitivity would translate this move into gain or loss."
         )
 
     st.markdown("###### Per-Instrument Shock Contribution (Full Portfolio, incl. hedge)")
@@ -828,39 +726,20 @@ def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_
                    f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
 
 
-def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame, ind_betas: dict):
-    st.markdown("##### What Could Hurt This Portfolio")
-    st.caption(
-        "A curated list of plausible, thematic risks to the current AI Infrastructure "
-        "Supercycle bet, long AVGO and copper, short duration, hedged with SOXX. This is "
-        "narrative, not a statistical forecast — worth revisiting if the portfolio's "
-        "composition changes."
-    )
-    for group in TAIL_RISKS:
-        st.markdown(f"###### {group['group']}")
-        for item in group["items"]:
-            with st.container(border=True):
-                worst_html = ' <span class="badge badge-worst">HIGHEST RISK</span>' if item.get("worst") else ""
-                st.markdown(f"**{item['title']}**{worst_html}", unsafe_allow_html=True)
-                st.markdown(item["body"])
-                hits_html = " ".join(f'<span class="badge badge-neutral">{t}</span>'
-                                      for t in item["hits"])
-                st.markdown(f"Hits: {hits_html}", unsafe_allow_html=True)
-
+def render_growth_scare_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame, ind_betas: dict):
     valid_full = {t: w for t, w in full_weights.items() if t in merged_rets.columns}
     if len(valid_full) < 2:
         return
 
-    st.divider()
-    st.markdown("##### Deep Dive: Growth Scare")
+    st.markdown("##### Growth Scare")
     st.caption("The single biggest threat to this book, because it's the one scenario that "
                "defeats both of its risk-reducing legs, short duration and the SOXX hedge, "
                "at the same time.")
 
     with st.container(border=True):
         st.markdown(
-            "Most of the risks above hit AVGO and SOXX together: when chip stocks sell off "
-            "broadly, the short SOXX hedge profits and cushions the blow. A growth scare is "
+            "Most sell-offs hit AVGO and SOXX together: when chip stocks sell off broadly, "
+            "the short SOXX hedge profits and cushions the blow. A growth scare is "
             "different. Investors typically rush into Treasuries for safety, so the short "
             "Treasury position, normally a diversifier, can start losing money at exactly "
             "the same time AVGO and copper are falling. Both legs that are supposed to "
@@ -1178,24 +1057,22 @@ def render_risk_scenarios_tab():
     mm_full = market_model(full_port_ret, spy_ret) if has_hedge else mm_base
     ind_betas = asset_betas(merged_rets, spy_ret, list(full_weights))
 
-    st.title("Risk Scenarios: VaR & Stressed VaR")
+    st.title("Risk Scenarios")
     st.caption(
         f"Single-factor market model vs. SPY · {mm_full['n']} overlapping trading days · "
-        f"Full portfolio β = {mm_full['beta']:.3f} (R² = {mm_full['r_squared']:.1%}) · "
-        f"Confidence level {int(confidence*100)}% (set in Controls → Risk Settings)."
+        f"Full portfolio β = {mm_full['beta']:.3f} (R² = {mm_full['r_squared']:.1%})."
     )
 
     sub_labels = ([s[0] for s in SCENARIO_DEFS] +
-                  ["Tail Risks", "Optimal Hedge", "Benchmark Comparison", "Save / Export"])
+                  ["Growth Scare", "Optimal Hedge", "Benchmark Comparison", "Save / Export"])
     sub = st.tabs(sub_labels)
 
     for (_, pct), tab in zip(SCENARIO_DEFS, sub[:6]):
         with tab:
-            render_scenario_content(pct, mm_base, mm_full, base_port_ret, full_port_ret,
-                                     has_hedge, ind_betas)
+            render_scenario_content(pct, mm_base, mm_full, has_hedge, ind_betas)
 
     with sub[6]:
-        render_tail_risks_content(full_port_ret, merged_rets, ind_betas)
+        render_growth_scare_content(full_port_ret, merged_rets, ind_betas)
 
     with sub[7]:
         render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
