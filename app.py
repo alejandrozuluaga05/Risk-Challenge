@@ -731,7 +731,7 @@ TAIL_RISKS = [
                 "hits": ["ZN=F"],
             },
             {
-                "title": "Recession-driven flight to quality",
+                "title": "Growth Scare",
                 "body": "A sharp growth scare sends investors rushing into Treasuries for "
                         "safety, rallying bond prices exactly when equities and copper are "
                         "also selling off — an “everything loses at once” scenario.",
@@ -828,7 +828,7 @@ def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_
                    f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
 
 
-def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame):
+def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame, ind_betas: dict):
     st.markdown("##### What Could Hurt This Portfolio")
     st.caption(
         "A curated list of plausible, thematic risks to the current AI Infrastructure "
@@ -852,7 +852,7 @@ def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFram
         return
 
     st.divider()
-    st.markdown("##### Deep Dive: Recession-Driven Flight to Quality")
+    st.markdown("##### Deep Dive: Growth Scare")
     st.caption("The single biggest threat to this book, because it's the one scenario that "
                "defeats both of its risk-reducing legs, short duration and the SOXX hedge, "
                "at the same time.")
@@ -860,11 +860,11 @@ def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFram
     with st.container(border=True):
         st.markdown(
             "Most of the risks above hit AVGO and SOXX together: when chip stocks sell off "
-            "broadly, the short SOXX hedge profits and cushions the blow. A broad recession "
-            "scare is different. Investors typically rush into Treasuries for safety, so the "
-            "short Treasury position, normally a diversifier, can start losing money at "
-            "exactly the same time AVGO and copper are falling. Both legs that are supposed "
-            "to protect the book stop working together."
+            "broadly, the short SOXX hedge profits and cushions the blow. A growth scare is "
+            "different. Investors typically rush into Treasuries for safety, so the short "
+            "Treasury position, normally a diversifier, can start losing money at exactly "
+            "the same time AVGO and copper are falling. Both legs that are supposed to "
+            "protect the book stop working together."
         )
 
     dd = drawdown_series(full_port_ret)
@@ -901,9 +901,70 @@ def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFram
             "Green bars cushioned the loss; red bars drove it."
         )
 
-    st.markdown("###### Why a Different Kind of Shock Would Be Worse")
+    st.markdown("###### Quantify It: A Two-Factor Growth-Scare Model")
     with st.container(border=True):
-        if "ZN=F" in valid_full and "AVGO" in valid_full:
+        zn_beta = ind_betas.get("ZN=F", float("nan"))
+        st.markdown(
+            "The scenario tabs elsewhere in this app use a single factor, SPY, to shock "
+            f"every position. That works for AVGO, copper, and SOXX, but ZN=F's beta to SPY "
+            f"is essentially zero ({zn_beta:.2f}), so that single-factor model can't capture "
+            "a genuine flight-to-quality rally in Treasuries — it would predict almost no "
+            "move at all for that leg, which is precisely the blind spot this scenario "
+            "exploits. This model overrides the Treasury leg with a direct, adjustable shock "
+            "instead of routing it through SPY beta."
+        )
+        c1, c2 = st.columns(2)
+        spy_shock_pct = c1.slider("Equity shock (SPY)", -30, 0, -15, step=1, key="gs_spy_shock")
+        zn_shock_pct = c2.slider("Treasury rally (ZN=F)", 0, 15, 5, step=1, key="gs_zn_shock")
+        spy_shock, zn_shock = spy_shock_pct / 100, zn_shock_pct / 100
+
+        rows, total_two_factor, total_naive = [], 0.0, 0.0
+        for t, w in valid_full.items():
+            beta_t = ind_betas.get(t, 0.0)
+            if t == "ZN=F":
+                contrib = w * zn_shock
+                naive_contrib = w * beta_t * spy_shock
+            else:
+                contrib = w * beta_t * spy_shock
+                naive_contrib = contrib
+            rows.append({"Ticker": t, "Weight": w, "Beta": beta_t, "P&L": contrib})
+            total_two_factor += contrib
+            total_naive += naive_contrib
+
+        m1, m2 = st.columns(2)
+        _metric_cell(m1, "Naive Single-Factor Estimate", total_naive, "+.1%",
+                     RED if total_naive < 0 else GREEN)
+        _metric_cell(m2, "Corrected Growth-Scare Estimate", total_two_factor, "+.1%",
+                     RED if total_two_factor < 0 else GREEN)
+        st.caption(
+            f"Ignoring the flight-to-quality dynamic in Treasuries changes the estimate by "
+            f"about {abs(total_two_factor - total_naive):.1%} in this scenario."
+        )
+
+        df = pd.DataFrame(rows).set_index("Ticker")
+        bar_colors = ["#dc2626" if v < 0 else "#16a34a" for v in df["P&L"]]
+        fig = go.Figure(go.Bar(x=list(df.index), y=df["P&L"] * 100, marker_color=bar_colors,
+                                text=[f"{v:+.2%}" for v in df["P&L"]], textposition="outside"))
+        fig.add_hline(y=0, line_color="#94a3b8")
+        fig.update_layout(height=320, margin=dict(t=20, b=20), yaxis_title="Estimated P&L (%)")
+        st.plotly_chart(fig, use_container_width=True, key="growth_scare_bar")
+
+        disp = pd.DataFrame({
+            "Weight": df["Weight"].map(lambda v: f"{v:+.1%}"),
+            "Beta to SPY": df["Beta"].map(lambda v: f"{v:.2f}"),
+            "Estimated P&L": df["P&L"].map(lambda v: f"{v:+.2%}"),
+        }, index=df.index)
+        st.dataframe(disp, use_container_width=True)
+        st.caption(
+            "ZN=F's contribution uses the Treasury rally slider directly; AVGO, copper, and "
+            "SOXX use their beta to SPY. Default sliders are informed by the COVID crash "
+            "(Feb–Mar 2020: SPY ≈ -32%, ZN=F ≈ +4%), scaled down to a milder growth-scare "
+            "magnitude — drag them to test other magnitudes."
+        )
+
+    if "ZN=F" in valid_full and "AVGO" in valid_full:
+        st.markdown("###### Live Evidence This Is Already Showing Up")
+        with st.container(border=True):
             full_corr, stress_corr, n_days, _ = conditional_correlation(
                 merged_rets[list(valid_full)], full_port_ret, quantile=0.10)
             avgo_zn_full = full_corr.loc["AVGO", "ZN=F"]
@@ -916,21 +977,13 @@ def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFram
                 "Treasury leg starts moving *with* AVGO instead of against it, right when it "
                 "matters most."
             )
-        st.markdown(
-            "For comparison: during the COVID crash (Feb–Mar 2020), a genuine "
-            "flight-to-quality event, the S&P 500 fell about 32% while 10-Year Treasury "
-            "futures *rose* about 4%. If a similar dynamic played out alongside an "
-            "AVGO/copper drawdown the size of 2022's, the short Treasury leg would swing "
-            "from a cushion to a drag, and the combined loss could plausibly run a few "
-            "points deeper than the historical worst we've actually experienced."
-        )
 
     st.markdown("###### Mitigations")
     with st.container(border=True):
         st.markdown(
             "Don't rely on short duration as the book's safety valve, it's actually a "
             "source of correlated risk in exactly this scenario, not a diversifier. Consider "
-            "a genuinely uncorrelated asset (gold, cash) sized specifically for a recession "
+            "a genuinely uncorrelated asset (gold, cash) sized specifically for a growth-scare "
             "scenario; watch the Correlation tab's tail-correlation view for early signs "
             "this dynamic is building; and size the SOXX hedge knowing it protects best "
             "against semis-specific shocks, not broad macro panics."
@@ -1142,7 +1195,7 @@ def render_risk_scenarios_tab():
                                      has_hedge, ind_betas)
 
     with sub[6]:
-        render_tail_risks_content(full_port_ret, merged_rets)
+        render_tail_risks_content(full_port_ret, merged_rets, ind_betas)
 
     with sub[7]:
         render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
