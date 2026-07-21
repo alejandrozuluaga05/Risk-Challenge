@@ -39,6 +39,8 @@ st.markdown("""
 .hedge-tag { font-size:0.65rem; font-weight:700; color:#5B6B82; text-transform:uppercase;
   letter-spacing:.04em; }
 .badge-sep { color:#C9D2DC; font-weight:400; }
+.badge-neutral { background:rgba(63,108,156,0.12); color:#3F6C9C;
+  border:1px solid rgba(63,108,156,0.35); }
 .news-item { padding:10px 2px; border-bottom:1px solid rgba(27,42,74,0.08); }
 .news-item:last-child { border-bottom:none; }
 .news-title { font-weight:600; text-decoration:none; color:#1B2A4A; transition:color .15s ease; }
@@ -675,6 +677,87 @@ def render_correlation_tab():
 SCENARIO_DEFS = [("Down 10%", -0.10), ("Down 5%", -0.05), ("Down 1%", -0.01),
                   ("Up 1%", 0.01), ("Up 5%", 0.05), ("Up 10%", 0.10)]
 
+# Curated, thematic tail risks for the current AI Infrastructure Supercycle bet
+# (long AVGO/copper, short duration, hedged with SOXX). Narrative, not statistical —
+# worth rewriting if the portfolio's composition or theme changes materially.
+TAIL_RISKS = [
+    {
+        "group": "Breaks the AI Infrastructure Thesis",
+        "items": [
+            {
+                "title": "Data center buildout gets regulated",
+                "body": "Local and national governments are increasingly scrutinizing data "
+                        "centers over power and water use. A wave of building moratoriums, "
+                        "environmental reviews, or grid-connection delays (already happening "
+                        "in parts of Virginia and Ireland) could slow the physical buildout "
+                        "that both chip demand and copper wiring depend on.",
+                "hits": ["AVGO", "HGZ26.CMX"],
+            },
+            {
+                "title": "Hyperscaler capex pullback",
+                "body": "If Microsoft, Google, Amazon, or Meta signal disappointment in AI "
+                        "returns and cut infrastructure spending guidance, semiconductor "
+                        "demand assumptions reset sharply lower — a handful of hyperscalers "
+                        "drive the bulk of AI chip orders.",
+                "hits": ["AVGO", "SOXX"],
+            },
+            {
+                "title": "An efficiency breakthrough shrinks compute demand",
+                "body": "A “DeepSeek moment,” a new model architecture that delivers "
+                        "similar AI capability with far fewer chips, would undercut the "
+                        "assumption that AI needs ever more hardware. It's happened once "
+                        "already and can happen again.",
+                "hits": ["AVGO", "SOXX"],
+            },
+            {
+                "title": "China/Taiwan chip supply shock",
+                "body": "Export controls, sanctions, or a Taiwan Strait crisis affecting TSMC "
+                        "(which fabricates AVGO's chips) would hit the semiconductor complex "
+                        "directly and could spike volatility sector-wide.",
+                "hits": ["AVGO", "SOXX"],
+            },
+        ],
+    },
+    {
+        "group": "Breaks the Rates Thesis",
+        "items": [
+            {
+                "title": "Sudden fiscal discipline",
+                "body": "A surprise bipartisan deficit deal or spending freeze would remove "
+                        "the “structurally higher issuance, higher yields” logic "
+                        "behind the short Treasury position, letting yields fall and the "
+                        "short lose money.",
+                "hits": ["ZN=F"],
+            },
+            {
+                "title": "Recession-driven flight to quality",
+                "body": "A sharp growth scare sends investors rushing into Treasuries for "
+                        "safety, rallying bond prices exactly when equities and copper are "
+                        "also selling off — an “everything loses at once” scenario.",
+                "hits": ["ZN=F", "AVGO", "HGZ26.CMX"],
+            },
+        ],
+    },
+    {
+        "group": "Copper-Specific",
+        "items": [
+            {
+                "title": "Copper supply glut or substitution",
+                "body": "Major new mine supply (Congo, Peru expansions) or wider aluminum "
+                        "substitution in wiring could undercut the “copper is "
+                        "structurally scarce” thesis behind the position.",
+                "hits": ["HGZ26.CMX"],
+            },
+            {
+                "title": "Global manufacturing slowdown",
+                "body": "A China property-style demand shock or broad industrial slowdown "
+                        "would hit copper demand independent of the AI narrative.",
+                "hits": ["HGZ26.CMX"],
+            },
+        ],
+    },
+]
+
 
 def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_ret: pd.Series,
                              full_port_ret: pd.Series, has_hedge: bool, ind_betas: dict):
@@ -741,6 +824,25 @@ def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_
         st.dataframe(disp2, use_container_width=True)
         st.caption(f"Contributions sum to {df2['Contribution'].sum():+.3%}, matching the full "
                    f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
+
+
+def render_tail_risks_content():
+    st.markdown("##### What Could Hurt This Portfolio")
+    st.caption(
+        "A curated list of plausible, thematic risks to the current AI Infrastructure "
+        "Supercycle bet, long AVGO and copper, short duration, hedged with SOXX. This is "
+        "narrative, not a statistical forecast — worth revisiting if the portfolio's "
+        "composition changes."
+    )
+    for group in TAIL_RISKS:
+        st.markdown(f"###### {group['group']}")
+        for item in group["items"]:
+            with st.container(border=True):
+                st.markdown(f"**{item['title']}**")
+                st.markdown(item["body"])
+                hits_html = " ".join(f'<span class="badge badge-neutral">{t}</span>'
+                                      for t in item["hits"])
+                st.markdown(f"Hits: {hits_html}", unsafe_allow_html=True)
 
 
 def render_optimal_hedge_content(base_port_ret: pd.Series, merged_rets: pd.DataFrame,
@@ -938,7 +1040,8 @@ def render_risk_scenarios_tab():
         f"Confidence level {int(confidence*100)}% (set in Controls → Risk Settings)."
     )
 
-    sub_labels = [s[0] for s in SCENARIO_DEFS] + ["Optimal Hedge", "Benchmark Comparison", "Save / Export"]
+    sub_labels = ([s[0] for s in SCENARIO_DEFS] +
+                  ["Tail Risks", "Optimal Hedge", "Benchmark Comparison", "Save / Export"])
     sub = st.tabs(sub_labels)
 
     for (_, pct), tab in zip(SCENARIO_DEFS, sub[:6]):
@@ -947,12 +1050,15 @@ def render_risk_scenarios_tab():
                                      has_hedge, ind_betas)
 
     with sub[6]:
-        render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
+        render_tail_risks_content()
 
     with sub[7]:
-        render_benchmark_content(base_port_ret, full_port_ret, spy_ret, ief_ret, has_hedge)
+        render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
 
     with sub[8]:
+        render_benchmark_content(base_port_ret, full_port_ret, spy_ret, ief_ret, has_hedge)
+
+    with sub[9]:
         render_save_export_content()
 
 
