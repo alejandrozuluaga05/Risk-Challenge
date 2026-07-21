@@ -41,6 +41,7 @@ st.markdown("""
 .badge-sep { color:#C9D2DC; font-weight:400; }
 .badge-neutral { background:rgba(63,108,156,0.12); color:#3F6C9C;
   border:1px solid rgba(63,108,156,0.35); }
+.badge-worst { background:#C0392B; color:#FFFFFF; font-size:0.68rem; }
 .news-item { padding:10px 2px; border-bottom:1px solid rgba(27,42,74,0.08); }
 .news-item:last-child { border-bottom:none; }
 .news-title { font-weight:600; text-decoration:none; color:#1B2A4A; transition:color .15s ease; }
@@ -735,6 +736,7 @@ TAIL_RISKS = [
                         "safety, rallying bond prices exactly when equities and copper are "
                         "also selling off — an “everything loses at once” scenario.",
                 "hits": ["ZN=F", "AVGO", "HGZ26.CMX"],
+                "worst": True,
             },
         ],
     },
@@ -826,7 +828,7 @@ def render_scenario_content(pct: float, mm_base: dict, mm_full: dict, base_port_
                    f"portfolio's Shock P&L above exactly (weighted-beta decomposition).")
 
 
-def render_tail_risks_content():
+def render_tail_risks_content(full_port_ret: pd.Series, merged_rets: pd.DataFrame):
     st.markdown("##### What Could Hurt This Portfolio")
     st.caption(
         "A curated list of plausible, thematic risks to the current AI Infrastructure "
@@ -838,11 +840,101 @@ def render_tail_risks_content():
         st.markdown(f"###### {group['group']}")
         for item in group["items"]:
             with st.container(border=True):
-                st.markdown(f"**{item['title']}**")
+                worst_html = ' <span class="badge badge-worst">HIGHEST RISK</span>' if item.get("worst") else ""
+                st.markdown(f"**{item['title']}**{worst_html}", unsafe_allow_html=True)
                 st.markdown(item["body"])
                 hits_html = " ".join(f'<span class="badge badge-neutral">{t}</span>'
                                       for t in item["hits"])
                 st.markdown(f"Hits: {hits_html}", unsafe_allow_html=True)
+
+    valid_full = {t: w for t, w in full_weights.items() if t in merged_rets.columns}
+    if len(valid_full) < 2:
+        return
+
+    st.divider()
+    st.markdown("##### Deep Dive: Recession-Driven Flight to Quality")
+    st.caption("The single biggest threat to this book, because it's the one scenario that "
+               "defeats both of its risk-reducing legs, short duration and the SOXX hedge, "
+               "at the same time.")
+
+    with st.container(border=True):
+        st.markdown(
+            "Most of the risks above hit AVGO and SOXX together: when chip stocks sell off "
+            "broadly, the short SOXX hedge profits and cushions the blow. A broad recession "
+            "scare is different. Investors typically rush into Treasuries for safety, so the "
+            "short Treasury position, normally a diversifier, can start losing money at "
+            "exactly the same time AVGO and copper are falling. Both legs that are supposed "
+            "to protect the book stop working together."
+        )
+
+    dd = drawdown_series(full_port_ret)
+    trough_date = dd.idxmin()
+    curve = equity_curve(full_port_ret, base=1.0)
+    peak_date = curve[:trough_date].idxmax()
+    window_rets = merged_rets[list(valid_full)].loc[peak_date:trough_date]
+    leg_total_return = (1 + window_rets).prod() - 1
+    contributions = {t: valid_full[t] * leg_total_return[t] for t in valid_full}
+
+    st.markdown("###### What Actually Happened Last Time")
+    with st.container(border=True):
+        st.markdown(
+            f"The portfolio's worst real drawdown ran from **{peak_date.date()}** to "
+            f"**{trough_date.date()}** ({dd.min():.1%} peak-to-trough), driven by the 2022 "
+            "Fed hiking cycle. AVGO and copper sold off hard, but because yields were "
+            "*rising* in that episode (bad for long bonds, good for our short), the short "
+            "Treasury position actually gained, and so did the short SOXX hedge, cushioning "
+            "what would otherwise have been a sharper drop."
+        )
+        fig = go.Figure(go.Bar(
+            x=list(contributions.keys()), y=[v * 100 for v in contributions.values()],
+            marker_color=["#dc2626" if v < 0 else "#16a34a" for v in contributions.values()],
+            text=[f"{v:+.1%}" for v in contributions.values()], textposition="outside",
+        ))
+        fig.add_hline(y=0, line_color="#94a3b8")
+        fig.update_layout(height=320, margin=dict(t=20, b=20),
+                           yaxis_title="Contribution to Drawdown (%)")
+        st.plotly_chart(fig, use_container_width=True, key="deepdive_2022_bar")
+        st.caption(
+            f"Sum of simple per-leg contributions: {sum(contributions.values()):+.1%} vs. "
+            f"the {dd.min():.1%} true compounded drawdown above — the gap is normal "
+            "compounding/rebalancing drift over a multi-month window, not a data error. "
+            "Green bars cushioned the loss; red bars drove it."
+        )
+
+    st.markdown("###### Why a Different Kind of Shock Would Be Worse")
+    with st.container(border=True):
+        if "ZN=F" in valid_full and "AVGO" in valid_full:
+            full_corr, stress_corr, n_days, _ = conditional_correlation(
+                merged_rets[list(valid_full)], full_port_ret, quantile=0.10)
+            avgo_zn_full = full_corr.loc["AVGO", "ZN=F"]
+            avgo_zn_stress = stress_corr.loc["AVGO", "ZN=F"]
+            st.markdown(
+                f"On a typical day, AVGO and the Treasury position barely relate to each "
+                f"other (correlation of {avgo_zn_full:+.2f}), which is exactly what you want "
+                f"from a diversifying short-duration bet. But on the portfolio's worst "
+                f"{n_days} days, that correlation rises to {avgo_zn_stress:+.2f}: the "
+                "Treasury leg starts moving *with* AVGO instead of against it, right when it "
+                "matters most."
+            )
+        st.markdown(
+            "For comparison: during the COVID crash (Feb–Mar 2020), a genuine "
+            "flight-to-quality event, the S&P 500 fell about 32% while 10-Year Treasury "
+            "futures *rose* about 4%. If a similar dynamic played out alongside an "
+            "AVGO/copper drawdown the size of 2022's, the short Treasury leg would swing "
+            "from a cushion to a drag, and the combined loss could plausibly run a few "
+            "points deeper than the historical worst we've actually experienced."
+        )
+
+    st.markdown("###### Mitigations")
+    with st.container(border=True):
+        st.markdown(
+            "Don't rely on short duration as the book's safety valve, it's actually a "
+            "source of correlated risk in exactly this scenario, not a diversifier. Consider "
+            "a genuinely uncorrelated asset (gold, cash) sized specifically for a recession "
+            "scenario; watch the Correlation tab's tail-correlation view for early signs "
+            "this dynamic is building; and size the SOXX hedge knowing it protects best "
+            "against semis-specific shocks, not broad macro panics."
+        )
 
 
 def render_optimal_hedge_content(base_port_ret: pd.Series, merged_rets: pd.DataFrame,
@@ -1050,7 +1142,7 @@ def render_risk_scenarios_tab():
                                      has_hedge, ind_betas)
 
     with sub[6]:
-        render_tail_risks_content()
+        render_tail_risks_content(full_port_ret, merged_rets)
 
     with sub[7]:
         render_optimal_hedge_content(base_port_ret, merged_rets, valid_tickers)
