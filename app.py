@@ -956,6 +956,121 @@ def render_risk_scenarios_tab():
         render_save_export_content()
 
 
+# --------------------------------------------------------------- glossary --
+CALC_SECTIONS = [
+    ("Performance Metrics", [
+        ("Portfolio Return", r"r_{p,t} = \sum_i w_i \, r_{i,t}",
+         "Each day's portfolio return is the weighted sum of every position's return — "
+         "positive weights for longs, negative for shorts."),
+        ("Total Return", r"\prod_{t=1}^{N}(1+r_t) \;-\; 1",
+         "The total compounded gain or loss over the full period, including the effect of "
+         "compounding day to day."),
+        ("CAGR", r"(1+R_{\text{total}})^{252/N} \;-\; 1",
+         "Total return re-expressed as a constant annual growth rate, so periods of different "
+         "lengths can be compared apples-to-apples."),
+        ("Annualized Volatility", r"\sigma_{\text{ann}} = \sigma_{\text{daily}} \times \sqrt{252}",
+         "How much daily returns typically swing, scaled up to a yearly figure — the standard "
+         "measure of risk."),
+        ("Sharpe Ratio", r"\text{Sharpe} = \frac{\bar{r} - r_f/252}{\sigma_{\text{daily}}} \times \sqrt{252}",
+         "Return earned per unit of risk taken, above the risk-free rate — higher means better "
+         "risk-adjusted performance."),
+        ("Max Drawdown", r"\min_t \left(\frac{E_t}{\max_{k \le t} E_k} - 1\right)",
+         "The worst peak-to-trough loss the portfolio has experienced — a gut-check on how bad "
+         "it can get before recovering."),
+    ]),
+    ("Risk Metrics: VaR & CVaR", [
+        ("Historical VaR", r"VaR_c = -\,\text{Percentile}\big(r,\;100(1-c)\big)",
+         "The loss you'd expect to exceed only (1-c) of the time — e.g. 95% VaR is the "
+         "threshold breached on the worst 5% of days."),
+        ("Historical CVaR (Expected Shortfall)", r"CVaR_c = -\,\mathbb{E}\big[\,r \mid r \le -VaR_c\,\big]",
+         "The average loss on those worst days beyond VaR — answers \"how bad is bad\", not "
+         "just \"how often\"."),
+    ]),
+    ("Correlation & Diversification", [
+        ("Pearson Correlation", r"\rho_{XY} = \frac{\text{Cov}(X,Y)}{\sigma_X\,\sigma_Y}",
+         "How closely two assets move together linearly, from -1 (perfect opposite) to +1 "
+         "(perfect together)."),
+        ("Spearman / Kendall Correlation", r"\rho_S = \rho_{\text{Pearson}}\big(\text{rank}(X),\,\text{rank}(Y)\big)",
+         "Correlation based on the ranking of returns rather than their exact values — catches "
+         "non-linear relationships Pearson can miss."),
+        ("Correlation Confidence Interval", r"z=\tanh^{-1}(\rho),\qquad SE=\frac{1}{\sqrt{n-3}}",
+         "The Fisher z-transform turns a correlation into something normally distributed, so we "
+         "can put a statistically valid confidence band around it."),
+        ("Portfolio Variance", r"\sigma_p^2 = w^{\top}\Sigma\,w",
+         "The total risk of the portfolio, accounting for every position's own volatility AND "
+         "how they move together (the covariance matrix Σ)."),
+        ("Marginal Contribution to Risk (MCTR)", r"MCTR_i = \frac{(\Sigma w)_i}{\sigma_p}",
+         "How much portfolio risk would change for a tiny increase in one position's weight — "
+         "the \"risk price\" of each holding."),
+        ("Component Contribution to Risk (CCTR)", r"CCTR_i = w_i \times MCTR_i",
+         "Each position's actual slice of total portfolio risk; these add up exactly to the "
+         "portfolio's volatility."),
+        ("Diversification Ratio", r"DR = \frac{\sum_i |w_i|\,\sigma_i}{\sigma_p}",
+         "How much risk reduction you're getting from diversification — above 1 means the mix "
+         "is genuinely safer than the sum of its parts."),
+        ("Clustering Distance", r"d_{ij} = \sqrt{0.5\,(1-\rho_{ij})}",
+         "Turns correlation into a proper \"distance\" between two assets, used to group "
+         "similar (redundant) positions together."),
+        ("Principal Component Analysis", r"\Sigma_{\text{corr}}\,v = \lambda\,v",
+         "Breaks the correlation structure into independent \"factors\" — the first factor "
+         "usually captures the single biggest common driver of risk."),
+    ]),
+    ("Factor Model & Scenario Shocks", [
+        ("Market Model (Beta Regression)", r"r_p = \alpha + \beta\, r_{\text{mkt}} + \varepsilon",
+         "Splits portfolio returns into a part explained by the overall market (β) and a part "
+         "that's idiosyncratic (ε) — the basis for stress testing."),
+        ("Beta", r"\beta = \frac{\text{Cov}(r_p,\,r_{\text{mkt}})}{\text{Var}(r_{\text{mkt}})}",
+         "How sensitive the portfolio is to market-wide moves — a beta of 0.5 means roughly "
+         "half the market's swing, in the same direction."),
+        ("Scenario Shock P&L", r"\Delta P = \beta_p \times S",
+         "A quick estimate of portfolio impact if the market instantly moved by S% — the pure "
+         "systematic, beta-driven effect."),
+        ("Stressed VaR (SVaR)", r"SVaR = -(\mu + z_{1-c}\,\sigma_{\text{resid}})",
+         "VaR recalculated assuming the market has just made the scenario move — captures "
+         "downside risk specific to your positions, on top of the market shock."),
+        ("Stressed CVaR (SCVaR)", r"SCVaR = -\left(\mu - \sigma_{\text{resid}}\frac{\phi(z_{1-c})}{1-c}\right)",
+         "The average tail loss under that same shocked scenario — the \"how bad is bad\" "
+         "version of Stressed VaR."),
+    ]),
+    ("Hedging", [
+        ("Optimal Hedge Ratio", r"h^{*} = -\frac{\text{Cov}(r_p,\,r_h)}{\text{Var}(r_h)}",
+         "The exact amount of a hedge instrument that minimizes portfolio variance — more or "
+         "less than this, and you're leaving risk reduction on the table."),
+        ("Hedge Effectiveness", r"HE = \rho_{p,h}^{2}",
+         "The maximum fraction of portfolio variance a given hedge instrument can possibly "
+         "remove, if sized optimally."),
+    ]),
+    ("Benchmark Comparison", [
+        ("Annualized Alpha", r"\alpha_{\text{ann}} = \alpha_{\text{daily}} \times 252",
+         "Return earned above (or below) what the portfolio's market exposure alone would "
+         "predict — the \"skill\" component."),
+        ("Tracking Error", r"TE = \sigma(r_p - r_b)\times\sqrt{252}",
+         "How much the portfolio's returns wander away from the benchmark's, day to day — "
+         "higher means bigger benchmark-relative swings."),
+        ("Information Ratio", r"IR = \frac{\overline{(r_p - r_b)}\times 252}{TE}",
+         "Excess return earned per unit of tracking error — the benchmark-relative version of "
+         "the Sharpe ratio."),
+        ("Up/Down Capture Ratio", r"UC = \frac{\overline{\,r_p \mid r_b>0\,}}{\overline{\,r_b \mid r_b>0\,}}",
+         "What fraction of the benchmark's up days (or down days) the portfolio participates "
+         "in — ideally high on up days, low on down days."),
+    ]),
+]
+
+
+def render_calculations_tab():
+    st.title("Calculations")
+    st.caption("Every formula used elsewhere in this dashboard, in one place — the exact "
+               "calculation, followed by a plain-English read of what it tells you.")
+
+    for section_title, items in CALC_SECTIONS:
+        st.markdown(f"#### {section_title}")
+        for name, formula, meaning in items:
+            with st.container(border=True):
+                st.markdown(f"**{name}**")
+                st.latex(formula)
+                st.caption(meaning)
+
+
 def _sync_weight(item: dict, source: str):
     w_key, n_key = f"w_{item['id']}", f"wn_{item['id']}"
     if source == "slider":
@@ -1059,7 +1174,7 @@ def render_controls_tab():
 tab_tickers = list(dict.fromkeys(
     [h["ticker"] for h in holdings] + [g["ticker"] for g in hedges]
 ))
-tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Risk Scenarios", "Controls"]
+tab_labels = ["Portfolio"] + tab_tickers + ["Correlation", "Risk Scenarios", "Calculations", "Controls"]
 tabs = st.tabs(tab_labels)
 
 with tabs[0]:
@@ -1069,11 +1184,14 @@ for ticker, tab in zip(tab_tickers, tabs[1:len(tab_tickers) + 1]):
     with tab:
         render_ticker_tab(ticker)
 
-with tabs[-3]:
+with tabs[-4]:
     render_correlation_tab()
 
-with tabs[-2]:
+with tabs[-3]:
     render_risk_scenarios_tab()
+
+with tabs[-2]:
+    render_calculations_tab()
 
 with tabs[-1]:
     render_controls_tab()
