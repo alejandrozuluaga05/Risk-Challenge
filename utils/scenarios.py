@@ -1,18 +1,14 @@
-"""Scenario stress testing (VaR/SVaR), optimal hedge ratio, and benchmark
+"""Beta/market-model scenario analysis, optimal hedge ratio, and benchmark
 comparison — single-factor (market model) methodology.
 
 Core model: regress portfolio daily returns on a market-factor proxy
-(SPY) to get beta/alpha/R^2 and residual (idiosyncratic) volatility. A
-scenario shock S to the market factor implies a systematic portfolio P&L
-of beta * S; residual volatility around that shocked mean gives a
-closed-form (Gaussian) Stressed VaR / Stressed CVaR. All formulas are
-verified against Monte Carlo simulation and brute-force optimization in
-the test/validation scripts used during development.
+(SPY) to get beta/alpha/R^2 and residual (idiosyncratic) volatility.
+Formulas are verified against brute-force optimization in the
+test/validation scripts used during development.
 """
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.stats import norm
 
 TRADING_DAYS = 252
 
@@ -42,23 +38,6 @@ def asset_betas(returns_df: pd.DataFrame, market_returns: pd.Series, tickers: li
         beta, alpha, r, p_value, se = stats.linregress(aligned["m"], aligned["a"])
         betas[t] = float(beta)
     return betas
-
-
-def scenario_shock(beta_p: float, market_shock: float) -> float:
-    """Point-estimate systematic P&L from a market factor shock."""
-    return beta_p * market_shock
-
-
-def stressed_var_cvar(beta_p: float, market_shock: float, residual_std: float,
-                       confidence: float = 0.95):
-    """Closed-form Gaussian Stressed VaR / Stressed CVaR: the portfolio's
-    residual (idiosyncratic) distribution re-centered at the scenario's
-    systematic shock. Verified against 2M-draw Monte Carlo simulation."""
-    mu = beta_p * market_shock
-    z = norm.ppf(1 - confidence)
-    svar = -(mu + z * residual_std)
-    scvar = -(mu - residual_std * norm.pdf(z) / (1 - confidence))
-    return float(svar), float(scvar), float(mu)
 
 
 def optimal_hedge_ratio(port_returns: pd.Series, hedge_returns: pd.Series):

@@ -15,7 +15,7 @@ from utils.correlation import (
 from utils.data import fetch_display_name, fetch_news, fetch_prices, fetch_quote
 from utils.metrics import (
     CHART_WINDOW_LABELS, drawdown_series, equity_curve, gross_exposure,
-    historical_cvar, historical_var, max_drawdown, multi_horizon_table,
+    max_drawdown, multi_horizon_table,
     net_exposure, portfolio_daily_returns, resolve_window, summary_metrics,
 )
 from utils.scenarios import (
@@ -226,7 +226,7 @@ def render_ticker_tab(ticker: str):
 
     st.markdown("##### Performance by Horizon")
     with st.container(border=True):
-        st.dataframe(format_horizon_table(multi_horizon_table(returns, risk_free, confidence)),
+        st.dataframe(format_horizon_table(multi_horizon_table(returns, risk_free)),
                      use_container_width=True)
 
     st.markdown("##### Charts")
@@ -244,9 +244,6 @@ def _metric_cell(col, label: str, value, fmt: str, color: str):
 
 
 def render_metric_cards(m: dict):
-    var_key = f"VaR {int(confidence*100)}% (1d)"
-    cvar_key = f"CVaR {int(confidence*100)}% (1d)"
-
     row1 = st.columns(4)
     _metric_cell(row1[0], "Total Return", m["Total Return"], ".1%",
                  GREEN if m["Total Return"] >= 0 else RED)
@@ -259,8 +256,6 @@ def render_metric_cards(m: dict):
     row2 = st.columns(4)
     _metric_cell(row2[0], "Ann. Volatility", m["Ann. Volatility"], ".1%", NAVY)
     _metric_cell(row2[1], "Max Drawdown", m["Max Drawdown"], ".1%", RED)
-    _metric_cell(row2[2], var_key, m[var_key], ".2%", AMBER)
-    _metric_cell(row2[3], cvar_key, m[cvar_key], ".2%", AMBER)
 
 
 def render_weights_pie(weights: dict, key: str):
@@ -328,7 +323,7 @@ def render_portfolio_tab():
 
     st.markdown("##### Performance by Horizon")
     with st.container(border=True):
-        st.dataframe(format_horizon_table(multi_horizon_table(base_returns, risk_free, confidence)),
+        st.dataframe(format_horizon_table(multi_horizon_table(base_returns, risk_free)),
                      use_container_width=True)
 
     st.markdown("##### Time Range")
@@ -339,7 +334,7 @@ def render_portfolio_tab():
 
     st.markdown(f"##### Key Metrics ({range_label})")
     with st.container(border=True):
-        render_metric_cards(summary_metrics(window_returns, risk_free, confidence))
+        render_metric_cards(summary_metrics(window_returns, risk_free))
 
     st.markdown("##### Charts")
     with st.container(border=True):
@@ -370,8 +365,8 @@ def render_portfolio_tab():
 
     st.markdown("##### Metrics: Before vs After Hedge")
     with st.container(border=True):
-        base_metrics = summary_metrics(base_returns, risk_free, confidence)
-        hedged_metrics = summary_metrics(hedged_returns, risk_free, confidence)
+        base_metrics = summary_metrics(base_returns, risk_free)
+        hedged_metrics = summary_metrics(hedged_returns, risk_free)
         metric_rows = [{"Metric": k, "Before Hedge": base_metrics[k],
                          "After Hedge": hedged_metrics[k], "Δ": hedged_metrics[k] - base_metrics[k]}
                         for k in base_metrics]
@@ -406,20 +401,12 @@ def render_portfolio_tab():
             fig.add_trace(go.Histogram(x=hedged_returns, name="After Hedge", opacity=0.55,
                                         marker_color="#16a34a", nbinsx=60,
                                         histnorm="probability density"))
-            var_before = -historical_var(base_returns, confidence)
-            var_after = -historical_var(hedged_returns, confidence)
-            fig.add_vline(x=var_before, line_dash="dash", line_color="#2563eb",
-                           annotation_text=f"VaR before {var_before:.2%}",
-                           annotation_position="top left", annotation_yshift=10)
-            fig.add_vline(x=var_after, line_dash="dash", line_color="#16a34a",
-                           annotation_text=f"VaR after {var_after:.2%}",
-                           annotation_position="top left", annotation_yshift=-15)
             fig.update_layout(title="Daily Return Distribution: Before vs After Hedge",
                                barmode="overlay", height=380, xaxis_tickformat=".1%",
                                margin=dict(t=40, b=20))
             st.plotly_chart(fig, use_container_width=True, key="hedge_hist")
 
-    st.markdown("##### Drawdown & Tail Risk")
+    st.markdown("##### Drawdown Comparison")
     with st.container(border=True):
         dd_c1, dd_c2 = st.columns(2)
         with dd_c1:
@@ -436,19 +423,12 @@ def render_portfolio_tab():
             st.plotly_chart(fig, use_container_width=True, key="hedge_dd")
 
         with dd_c2:
-            st.markdown("**Tail Risk Summary**")
-            tail_df = pd.DataFrame({
-                "Before Hedge": [f"{historical_var(base_returns, confidence):.2%}",
-                                  f"{historical_cvar(base_returns, confidence):.2%}",
-                                  f"{max_drawdown(base_returns):.2%}"],
-                "After Hedge": [f"{historical_var(hedged_returns, confidence):.2%}",
-                                 f"{historical_cvar(hedged_returns, confidence):.2%}",
-                                 f"{max_drawdown(hedged_returns):.2%}"],
-            }, index=[f"VaR {int(confidence*100)}%", f"CVaR {int(confidence*100)}%", "Max Drawdown"])
-            st.table(tail_df)
-            st.caption("VaR/CVaR are 1-day historical figures on portfolio daily returns. "
-                       "A less negative (smaller magnitude) figure after hedging indicates "
-                       "reduced tail risk.")
+            st.markdown("**Max Drawdown**")
+            m1, m2 = st.columns(2)
+            _metric_cell(m1, "Before Hedge", max_drawdown(base_returns), ".1%", RED)
+            _metric_cell(m2, "After Hedge", max_drawdown(hedged_returns), ".1%", RED)
+            st.caption("A less negative (smaller magnitude) figure after hedging indicates "
+                       "a shallower worst-case peak-to-trough decline.")
 
 
 # ------------------------------------------------------------ correlation --
@@ -1178,7 +1158,7 @@ def render_controls_tab():
         st.session_state.setdefault("confidence_pct", 95)
         c1, c2 = st.columns(2)
         c1.slider("Risk-free rate (annual %)", 0.0, 10.0, step=0.25, key="risk_free")
-        c2.slider("VaR / CVaR confidence (%)", 90, 99, step=1, key="confidence_pct")
+        c2.slider("Correlation confidence level (%)", 90, 99, step=1, key="confidence_pct")
 
     st.divider()
     st.markdown("#### Live Exposure Summary")

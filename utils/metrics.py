@@ -75,26 +75,7 @@ def drawdown_series(returns: pd.Series) -> pd.Series:
     return curve / running_max - 1
 
 
-def historical_var(returns: pd.Series, confidence: float = 0.95) -> float:
-    """Historical VaR as a positive loss fraction (e.g. 0.03 = 3% loss)."""
-    if returns.empty:
-        return np.nan
-    return float(-np.percentile(returns, (1 - confidence) * 100))
-
-
-def historical_cvar(returns: pd.Series, confidence: float = 0.95) -> float:
-    """Historical CVaR (Expected Shortfall) as a positive loss fraction."""
-    if returns.empty:
-        return np.nan
-    var_threshold = np.percentile(returns, (1 - confidence) * 100)
-    tail = returns[returns <= var_threshold]
-    if tail.empty:
-        return float(-var_threshold)
-    return float(-tail.mean())
-
-
-def summary_metrics(returns: pd.Series, risk_free_annual: float = 0.0,
-                     confidence: float = 0.95) -> dict:
+def summary_metrics(returns: pd.Series, risk_free_annual: float = 0.0) -> dict:
     return {
         "Total Return": cumulative_return(returns),
         "YTD Return": ytd_return(returns),
@@ -102,8 +83,6 @@ def summary_metrics(returns: pd.Series, risk_free_annual: float = 0.0,
         "Ann. Volatility": annualized_vol(returns),
         "Sharpe Ratio": sharpe_ratio(returns, risk_free_annual),
         "Max Drawdown": max_drawdown(returns),
-        f"VaR {int(confidence*100)}% (1d)": historical_var(returns, confidence),
-        f"CVaR {int(confidence*100)}% (1d)": historical_cvar(returns, confidence),
     }
 
 
@@ -154,20 +133,17 @@ def resolve_window(returns: pd.Series, label: str):
     return window, False
 
 
-def multi_horizon_table(returns: pd.Series, risk_free_annual: float = 0.0,
-                         confidence: float = 0.95) -> pd.DataFrame:
-    """Total Return / CAGR / Vol / Sharpe / Max DD / VaR / CVaR for each of
-    1Y, 3Y, 5Y, 10Y trailing windows. Columns without enough history are NaN."""
-    metric_names = ["Total Return", "CAGR", "Ann. Volatility", "Sharpe Ratio",
-                     "Max Drawdown", f"VaR {int(confidence*100)}% (1d)",
-                     f"CVaR {int(confidence*100)}% (1d)"]
+def multi_horizon_table(returns: pd.Series, risk_free_annual: float = 0.0) -> pd.DataFrame:
+    """Total Return / CAGR / Vol / Sharpe / Max DD for each of 1Y, 3Y, 5Y,
+    10Y trailing windows. Columns without enough history are NaN."""
+    metric_names = ["Total Return", "CAGR", "Ann. Volatility", "Sharpe Ratio", "Max Drawdown"]
     rows = {}
     for label, years in HORIZONS.items():
         window = trailing_slice(returns, years=years)
         if window is None or len(window) < 20:
             rows[label] = {k: np.nan for k in metric_names}
         else:
-            m = summary_metrics(window, risk_free_annual, confidence)
+            m = summary_metrics(window, risk_free_annual)
             m.pop("YTD Return", None)
             rows[label] = m
     return pd.DataFrame(rows)[list(HORIZONS)]
