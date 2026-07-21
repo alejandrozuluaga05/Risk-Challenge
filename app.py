@@ -987,17 +987,6 @@ def render_beta_tab():
     st.caption("How sensitive your portfolio is to the overall market (SPY) — and what that "
                "means in plain terms, not statistics.")
 
-    st.markdown("##### What Is Beta?")
-    with st.container(border=True):
-        st.markdown(
-            "Beta measures how much a position tends to move for every 1% move in the overall "
-            "market. A beta of **1.0** means it moves roughly in lockstep with the market. "
-            "**Above 1** means it swings *more* than the market — more sensitive, more "
-            "amplified. **Below 1** means it swings *less*. A **negative** beta means it "
-            "tends to move in the *opposite* direction. It's a quick, intuitive gut-check for "
-            "how much market-wide risk you're carrying, separate from stock-specific news."
-        )
-
     st.markdown("##### Your Portfolio's Beta")
     with st.container(border=True):
         if has_hedge:
