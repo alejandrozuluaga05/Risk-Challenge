@@ -278,6 +278,7 @@ def render_portfolio_tab():
         return
 
     base_returns = portfolio_daily_returns(prices[list(base_weights)], base_weights)
+    full_returns = portfolio_daily_returns(prices[list(full_weights)], full_weights)
 
     st.title("Portfolio")
     st.caption(f"Data source: Yahoo Finance (yfinance) · {base_returns.index.min().date()} → "
@@ -323,40 +324,35 @@ def render_portfolio_tab():
 
     st.markdown("##### Performance by Horizon")
     with st.container(border=True):
-        st.dataframe(format_horizon_table(multi_horizon_table(base_returns, risk_free)),
+        st.dataframe(format_horizon_table(multi_horizon_table(full_returns, risk_free)),
                      use_container_width=True)
+        if hedge_weights_input:
+            st.caption("Includes the hedge overlay configured in Controls.")
 
     st.markdown("##### Time Range")
     range_label = render_range_selector("portfolio")
-    window_returns, capped = resolve_window(base_returns, range_label)
+    full_window, capped = resolve_window(full_returns, range_label)
     if capped:
         st.info(f"Not enough history for a {range_label} window; showing full history instead.")
 
-    st.markdown(f"##### Key Metrics ({range_label})")
+    key_metrics_suffix = " — incl. hedge" if hedge_weights_input else ""
+    st.markdown(f"##### Key Metrics ({range_label}{key_metrics_suffix})")
     with st.container(border=True):
-        render_metric_cards(summary_metrics(window_returns, risk_free))
+        render_metric_cards(summary_metrics(full_window, risk_free))
 
     st.markdown("##### Charts")
     with st.container(border=True):
-        render_charts(window_returns, range_label, key_prefix="portfolio")
+        render_charts(full_window, range_label, key_prefix="portfolio")
 
     if not hedge_weights_input:
         st.info("Add a hedge instrument in the Controls tab to compare pre- and "
                 "post-hedge return distributions and risk metrics.")
         return
 
+    base_window, _ = resolve_window(base_returns, range_label)
+
     st.divider()
     st.header("Hedged Portfolio Comparison")
-
-    hedged_weights = dict(base_weights)
-    for t, w in hedge_weights_input.items():
-        hedged_weights[t] = hedged_weights.get(t, 0) + w
-
-    hedged_returns = portfolio_daily_returns(prices[list(hedged_weights)], hedged_weights)
-    hedged_window_returns, hedged_capped = resolve_window(hedged_returns, range_label)
-    if hedged_capped and not capped:
-        st.info(f"Not enough hedged-sleeve history for a {range_label} window; "
-                f"showing full history instead.")
 
     st.markdown(
         "Hedge overlay added on top of the base weights: " +
@@ -364,13 +360,13 @@ def render_portfolio_tab():
                    for t, w in hedge_weights_input.items()),
         unsafe_allow_html=True,
     )
-    st.caption(f"Hedged sleeve — Net exposure: {net_exposure(hedged_weights):.0%} · "
-               f"Gross exposure: {gross_exposure(hedged_weights):.0%}")
+    st.caption(f"Hedged sleeve — Net exposure: {net_exposure(full_weights):.0%} · "
+               f"Gross exposure: {gross_exposure(full_weights):.0%}")
 
     st.markdown(f"##### Metrics: Before vs After Hedge ({range_label})")
     with st.container(border=True):
-        base_metrics = summary_metrics(window_returns, risk_free)
-        hedged_metrics = summary_metrics(hedged_window_returns, risk_free)
+        base_metrics = summary_metrics(base_window, risk_free)
+        hedged_metrics = summary_metrics(full_window, risk_free)
         metric_rows = [{"Metric": k, "Before Hedge": base_metrics[k],
                          "After Hedge": hedged_metrics[k], "Δ": hedged_metrics[k] - base_metrics[k]}
                         for k in base_metrics]
@@ -386,8 +382,8 @@ def render_portfolio_tab():
     with st.container(border=True):
         c_eq, c_hist = st.columns(2)
         with c_eq:
-            base_curve = equity_curve(window_returns)
-            hedged_curve = equity_curve(hedged_window_returns)
+            base_curve = equity_curve(base_window)
+            hedged_curve = equity_curve(full_window)
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=base_curve.index, y=base_curve, name="Before Hedge",
                                       line=dict(color="#2563eb", width=2)))
@@ -399,10 +395,10 @@ def render_portfolio_tab():
 
         with c_hist:
             fig = go.Figure()
-            fig.add_trace(go.Histogram(x=window_returns, name="Before Hedge", opacity=0.55,
+            fig.add_trace(go.Histogram(x=base_window, name="Before Hedge", opacity=0.55,
                                         marker_color="#2563eb", nbinsx=60,
                                         histnorm="probability density"))
-            fig.add_trace(go.Histogram(x=hedged_window_returns, name="After Hedge", opacity=0.55,
+            fig.add_trace(go.Histogram(x=full_window, name="After Hedge", opacity=0.55,
                                         marker_color="#16a34a", nbinsx=60,
                                         histnorm="probability density"))
             fig.update_layout(title="Daily Return Distribution: Before vs After Hedge",
@@ -414,8 +410,8 @@ def render_portfolio_tab():
     with st.container(border=True):
         dd_c1, dd_c2 = st.columns(2)
         with dd_c1:
-            dd_before = drawdown_series(window_returns)
-            dd_after = drawdown_series(hedged_window_returns)
+            dd_before = drawdown_series(base_window)
+            dd_after = drawdown_series(full_window)
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=dd_before.index, y=dd_before, name="Before Hedge",
                                       line=dict(color="#2563eb", width=1)))
@@ -429,8 +425,8 @@ def render_portfolio_tab():
         with dd_c2:
             st.markdown("**Max Drawdown**")
             m1, m2 = st.columns(2)
-            _metric_cell(m1, "Before Hedge", max_drawdown(window_returns), ".1%", RED)
-            _metric_cell(m2, "After Hedge", max_drawdown(hedged_window_returns), ".1%", RED)
+            _metric_cell(m1, "Before Hedge", max_drawdown(base_window), ".1%", RED)
+            _metric_cell(m2, "After Hedge", max_drawdown(full_window), ".1%", RED)
             st.caption("A less negative (smaller magnitude) figure after hedging indicates "
                        "a shallower worst-case peak-to-trough decline.")
 
